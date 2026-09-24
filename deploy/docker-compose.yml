@@ -1,0 +1,35 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nexus
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - nexus-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  control-plane:
+    build:
+      context: ../services/control-plane
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/nexus
+      DB_USERNAME: nexus
+      DB_PASSWORD: nexus
+      FAKE_WORKER_ENABLED: "true"
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  nexus-postgres-data:
+

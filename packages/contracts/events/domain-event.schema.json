@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexus.local/schemas/domain-event.schema.json",
+  "title": "Nexus Domain Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sequence",
+    "event_id",
+    "aggregate_type",
+    "aggregate_id",
+    "run_id",
+    "event_type",
+    "payload",
+    "occurred_at"
+  ],
+  "properties": {
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^evt_[0-9a-f-]{36}$"
+    },
+    "aggregate_type": {
+      "type": "string",
+      "enum": ["RUN", "TASK"]
+    },
+    "aggregate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f-]{36}$"
+    },
+    "task_id": {
+      "type": ["string", "null"],
+      "pattern": "^tsk_[0-9a-f-]{36}$"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "RunCreated",
+        "RunQueued",
+        "RunStarted",
+        "RunSucceeded",
+        "RunFailed",
+        "TaskCreated",
+        "TaskLeased",
+        "TaskExecuting",
+        "TaskSucceeded",
+        "TaskFailed"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
+

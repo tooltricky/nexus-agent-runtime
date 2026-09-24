@@ -1,0 +1,212 @@
+package io.nexus.controlplane.persistence;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.nexus.controlplane.domain.Records.EventRecord;
+import io.nexus.controlplane.domain.Records.RunRecord;
+import io.nexus.controlplane.domain.Records.SessionRecord;
+import io.nexus.controlplane.domain.Records.TaskRecord;
+import io.nexus.controlplane.domain.RunStatus;
+import io.nexus.controlplane.domain.TaskStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public class RuntimeStore {
+    private final JdbcTemplate jdbc;
+    private final ObjectMapper objectMapper;
+
+    public RuntimeStore(JdbcTemplate jdbc, ObjectMapper objectMapper) {
+        this.jdbc = jdbc;
+        this.objectMapper = objectMapper;
+    }
+
+    public SessionRecord insertSession(String id) {
+        return jdbc.queryForObject(
+                "INSERT INTO sessions (id) VALUES (?) RETURNING id, created_at",
+                this::mapSession,
+                id
+        );
+    }
+
+    public boolean sessionExists(String id) {
+        Boolean exists = jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)", Boolean.class, id);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    public boolean tryInsertRun(String id, String sessionId, String idempotencyKey, String requestHash, String input) {
+        return jdbc.update("""
+                INSERT INTO runs (id, session_id, idempotency_key, request_hash, input, status)
+                VALUES (?, ?, ?, ?, ?, 'CREATED')
+                ON CONFLICT (idempotency_key) DO NOTHING
+                """, id, sessionId, idempotencyKey, requestHash, input) == 1;
+    }
+
+    public Optional<RunRecord> findRun(String id) {
+        return queryOne("SELECT * FROM runs WHERE id = ?", this::mapRun, id);
+    }
+
+    public Optional<RunRecord> findRunByIdempotencyKey(String idempotencyKey) {
+        return queryOne("SELECT * FROM runs WHERE idempotency_key = ?", this::mapRun, idempotencyKey);
+    }
+
+    public void insertTask(String id, String runId, String name, JsonNode input) {
+        jdbc.update("""
+                INSERT INTO tasks (id, run_id, name, status, input)
+                VALUES (?, ?, ?, 'PENDING', CAST(? AS jsonb))
+                """, id, runId, name, json(input));
+    }
+
+    public List<TaskRecord> findTasks(String runId) {
+        return jdbc.query("SELECT * FROM tasks WHERE run_id = ? ORDER BY created_at, id", this::mapTask, runId);
+    }
+
+    public Optional<TaskRecord> findNextActiveTaskForUpdate() {
+        return jdbc.query("""
+                        SELECT * FROM tasks
+                        WHERE status IN ('PENDING', 'LEASED', 'EXECUTING')
+                        ORDER BY created_at, id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT 1
+                        """, this::mapTask)
+                .stream()
+                .findFirst();
+    }
+
+    public void transitionRun(RunRecord run, RunStatus next, JsonNode output) {
+        run.status().requireTransitionTo(next);
+        int updated = jdbc.update("""
+                UPDATE runs
+                SET status = ?, output = CAST(? AS jsonb), version = version + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = ? AND version = ?
+                """, next.name(), jsonOrNull(output), run.id(), run.status().name(), run.version());
+        requireSingleUpdate(updated, "Run", run.id());
+    }
+
+    public void transitionTask(TaskRecord task, TaskStatus next, JsonNode output) {
+        task.status().requireTransitionTo(next);
+        int updated = jdbc.update("""
+                UPDATE tasks
+                SET status = ?, output = CAST(? AS jsonb), version = version + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = ? AND version = ?
+                """, next.name(), jsonOrNull(output), task.id(), task.status().name(), task.version());
+        requireSingleUpdate(updated, "Task", task.id());
+    }
+
+    public void appendEvent(
+            String eventId,
+            String aggregateType,
+            String aggregateId,
+            String runId,
+            String taskId,
+            String eventType,
+            JsonNode payload
+    ) {
+        jdbc.update("""
+                INSERT INTO domain_events
+                    (event_id, aggregate_type, aggregate_id, run_id, task_id, event_type, payload)
+                VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb))
+                """, eventId, aggregateType, aggregateId, runId, taskId, eventType, json(payload));
+    }
+
+    public List<EventRecord> findTimeline(String runId) {
+        return jdbc.query(
+                "SELECT * FROM domain_events WHERE run_id = ? ORDER BY sequence",
+                this::mapEvent,
+                runId
+        );
+    }
+
+    private SessionRecord mapSession(ResultSet rs, int rowNum) throws SQLException {
+        return new SessionRecord(rs.getString("id"), instant(rs, "created_at"));
+    }
+
+    private RunRecord mapRun(ResultSet rs, int rowNum) throws SQLException {
+        return new RunRecord(
+                rs.getString("id"),
+                rs.getString("session_id"),
+                rs.getString("idempotency_key"),
+                rs.getString("request_hash"),
+                rs.getString("input"),
+                RunStatus.valueOf(rs.getString("status")),
+                jsonNode(rs.getString("output")),
+                rs.getLong("version"),
+                instant(rs, "created_at"),
+                instant(rs, "updated_at")
+        );
+    }
+
+    private TaskRecord mapTask(ResultSet rs, int rowNum) throws SQLException {
+        return new TaskRecord(
+                rs.getString("id"),
+                rs.getString("run_id"),
+                rs.getString("name"),
+                TaskStatus.valueOf(rs.getString("status")),
+                jsonNode(rs.getString("input")),
+                jsonNode(rs.getString("output")),
+                rs.getLong("version"),
+                instant(rs, "created_at"),
+                instant(rs, "updated_at")
+        );
+    }
+
+    private EventRecord mapEvent(ResultSet rs, int rowNum) throws SQLException {
+        return new EventRecord(
+                rs.getLong("sequence"),
+                rs.getString("event_id"),
+                rs.getString("aggregate_type"),
+                rs.getString("aggregate_id"),
+                rs.getString("run_id"),
+                rs.getString("task_id"),
+                rs.getString("event_type"),
+                jsonNode(rs.getString("payload")),
+                instant(rs, "occurred_at")
+        );
+    }
+
+    private JsonNode jsonNode(String value) throws SQLException {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readTree(value);
+        } catch (JsonProcessingException e) {
+            throw new SQLException("Invalid JSON stored in database", e);
+        }
+    }
+
+    private String json(JsonNode value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("Could not serialize JSON", e);
+        }
+    }
+
+    private String jsonOrNull(JsonNode value) {
+        return value == null ? null : json(value);
+    }
+
+    private Instant instant(ResultSet rs, String column) throws SQLException {
+        Timestamp value = rs.getTimestamp(column);
+        return value.toInstant();
+    }
+
+    private <T> Optional<T> queryOne(String sql, org.springframework.jdbc.core.RowMapper<T> mapper, Object... args) {
+        return jdbc.query(sql, mapper, args).stream().findFirst();
+    }
+
+    private void requireSingleUpdate(int updated, String aggregate, String id) {
+        if (updated != 1) {
+            throw new IllegalStateException(aggregate + " " + id + " changed concurrently");
+        }
+    }
+}

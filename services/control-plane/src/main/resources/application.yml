@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: nexus-control-plane
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/nexus}
+    username: ${DB_USERNAME:nexus}
+    password: ${DB_PASSWORD:nexus}
+  flyway:
+    enabled: true
+  jackson:
+    default-property-inclusion: non_null
+    property-naming-strategy: SNAKE_CASE
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+nexus:
+  worker:
+    enabled: ${FAKE_WORKER_ENABLED:true}
+    poll-delay-ms: ${FAKE_WORKER_POLL_DELAY_MS:200}
