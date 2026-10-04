@@ -11,6 +11,11 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.time.Duration;
+import java.util.List;
 
 @Service
 @ConditionalOnProperty(name = "nexus.worker.enabled", havingValue = "true", matchIfMissing = true)
@@ -19,31 +24,46 @@ public class FakeWorkerService {
 
     private final RuntimeStore store;
     private final ObjectMapper objectMapper;
+    private final String workerId = Ids.workerId();
+    private final long leaseDurationMs;
 
-    public FakeWorkerService(RuntimeStore store, ObjectMapper objectMapper) {
+    @Autowired
+    public FakeWorkerService(
+            RuntimeStore store,
+            ObjectMapper objectMapper,
+            @Value("${nexus.worker.lease-duration-ms:30000}") long leaseDurationMs
+    ) {
         this.store = store;
         this.objectMapper = objectMapper;
+        this.leaseDurationMs = leaseDurationMs;
+    }
+
+    public FakeWorkerService(RuntimeStore store, ObjectMapper objectMapper) {
+        this(store, objectMapper, 30_000L);
     }
 
     @Scheduled(fixedDelayString = "${nexus.worker.poll-delay-ms:200}")
     @Transactional
     public void advanceOneTask() {
-        store.findNextActiveTaskForUpdate().ifPresent(this::advance);
+        recoverExpiredLeases();
+        store.findOwnedActiveTaskForUpdate(workerId)
+                .ifPresentOrElse(this::advance, this::claimAndAdvance);
+    }
+
+    private void claimAndAdvance() {
+        store.claimNextTask(workerId, Duration.ofMillis(leaseDurationMs)).ifPresent(this::leased);
     }
 
     private void advance(TaskRecord task) {
         switch (task.status()) {
-            case PENDING -> lease(task);
             case LEASED -> execute(task);
             case EXECUTING -> succeed(task);
-            default -> throw new IllegalStateException("Worker selected terminal Task " + task.id());
+            default -> throw new IllegalStateException("Worker selected non-active Task " + task.id());
         }
     }
 
-    private void lease(TaskRecord task) {
-        store.transitionTask(task, TaskStatus.LEASED, null);
-        appendTaskTransition(task, TaskStatus.LEASED, "TaskLeased");
-
+    private void leased(TaskRecord task) {
+        appendTaskLease(task);
         RunRecord run = requiredRun(task.runId());
         if (run.status() == RunStatus.QUEUED) {
             store.transitionRun(run, RunStatus.RUNNING, null);
@@ -60,13 +80,17 @@ public class FakeWorkerService {
     }
 
     private void execute(TaskRecord task) {
-        store.transitionTask(task, TaskStatus.EXECUTING, null);
+        if (!store.tryTransitionTaskOwned(task, TaskStatus.EXECUTING, null, workerId)) {
+            return;
+        }
         appendTaskTransition(task, TaskStatus.EXECUTING, "TaskExecuting");
     }
 
     private void succeed(TaskRecord task) {
         ObjectNode output = objectMapper.createObjectNode().put("summary", SUMMARY);
-        store.transitionTask(task, TaskStatus.SUCCEEDED, output);
+        if (!store.tryTransitionTaskOwned(task, TaskStatus.SUCCEEDED, output, workerId)) {
+            return;
+        }
         store.appendEvent(
                 Ids.eventId(),
                 "TASK",
@@ -87,6 +111,38 @@ public class FakeWorkerService {
                 null,
                 "RunSucceeded",
                 transitionPayload(RunStatus.RUNNING.name(), RunStatus.SUCCEEDED.name()).set("output", output)
+        );
+    }
+
+    private void recoverExpiredLeases() {
+        List<TaskRecord> expired = store.requeueExpiredLeases();
+        for (TaskRecord task : expired) {
+            store.appendEvent(
+                    Ids.eventId(),
+                    "TASK",
+                    task.id(),
+                    task.runId(),
+                    task.id(),
+                    "TaskLeaseExpired",
+                    transitionPayload(task.status().name(), TaskStatus.PENDING.name())
+                            .put("previous_lease_owner", task.leaseOwner())
+            );
+        }
+    }
+
+    private void appendTaskLease(TaskRecord task) {
+        store.appendEvent(
+                Ids.eventId(),
+                "TASK",
+                task.id(),
+                task.runId(),
+                task.id(),
+                "TaskLeased",
+                transitionPayload(TaskStatus.PENDING.name(), TaskStatus.LEASED.name())
+                        .put("lease_owner", task.leaseOwner())
+                        .put("attempt", task.attempt())
+                        .put("max_attempts", task.maxAttempts())
+                        .put("lease_expires_at", task.leaseExpiresAt().toString())
         );
     }
 

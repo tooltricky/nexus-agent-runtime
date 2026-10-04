@@ -21,5 +21,8 @@ final class Ids {
     static String eventId() {
         return "evt_" + UUID.randomUUID();
     }
-}
 
+    static String workerId() {
+        return "worker_" + UUID.randomUUID();
+    }
+}

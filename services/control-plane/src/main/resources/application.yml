@@ -28,3 +28,4 @@ nexus:
   worker:
     enabled: ${FAKE_WORKER_ENABLED:true}
     poll-delay-ms: ${FAKE_WORKER_POLL_DELAY_MS:200}
+    lease-duration-ms: ${FAKE_WORKER_LEASE_DURATION_MS:30000}

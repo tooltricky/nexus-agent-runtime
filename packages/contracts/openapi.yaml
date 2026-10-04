@@ -150,6 +150,20 @@ components:
           properties:
             summary:
               type: string
+        lease_owner:
+          type: string
+        lease_expires_at:
+          type: string
+          format: date-time
+        attempt:
+          type: integer
+          minimum: 0
+        max_attempts:
+          type: integer
+          minimum: 1
+        next_attempt_at:
+          type: string
+          format: date-time
         created_at:
           type: string
           format: date-time

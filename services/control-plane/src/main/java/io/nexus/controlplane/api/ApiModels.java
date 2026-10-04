@@ -27,6 +27,11 @@ public final class ApiModels {
             TaskStatus status,
             JsonNode input,
             JsonNode output,
+            String leaseOwner,
+            Instant leaseExpiresAt,
+            int attempt,
+            int maxAttempts,
+            Instant nextAttemptAt,
             Instant createdAt,
             Instant updatedAt
     ) {
@@ -63,4 +68,3 @@ public final class ApiModels {
     public record ErrorResponse(String code, String message) {
     }
 }
-

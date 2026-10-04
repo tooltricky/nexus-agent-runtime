@@ -15,6 +15,7 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -69,14 +70,42 @@ public class RuntimeStore {
         return jdbc.query("SELECT * FROM tasks WHERE run_id = ? ORDER BY created_at, id", this::mapTask, runId);
     }
 
-    public Optional<TaskRecord> findNextActiveTaskForUpdate() {
+    /** Atomically claims the oldest task ready to run and writes its lease. */
+    public Optional<TaskRecord> claimNextTask(String leaseOwner, Duration leaseDuration) {
+        long leaseMillis = leaseDuration.toMillis();
+        return jdbc.query("""
+                        WITH candidate AS (
+                            SELECT id
+                            FROM tasks
+                            WHERE status = 'PENDING'
+                              AND next_attempt_at <= CURRENT_TIMESTAMP
+                            ORDER BY created_at, id
+                            FOR UPDATE SKIP LOCKED
+                            LIMIT 1
+                        )
+                        UPDATE tasks
+                        SET status = 'LEASED',
+                            lease_owner = ?,
+                            lease_expires_at = CURRENT_TIMESTAMP + (? * INTERVAL '1 millisecond'),
+                            attempt = attempt + 1,
+                            version = version + 1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = (SELECT id FROM candidate)
+                        RETURNING *
+                        """, this::mapTask, leaseOwner, leaseMillis)
+                .stream()
+                .findFirst();
+    }
+
+    public Optional<TaskRecord> findOwnedActiveTaskForUpdate(String leaseOwner) {
         return jdbc.query("""
                         SELECT * FROM tasks
-                        WHERE status IN ('PENDING', 'LEASED', 'EXECUTING')
+                        WHERE status IN ('LEASED', 'EXECUTING')
+                          AND lease_owner = ?
                         ORDER BY created_at, id
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
-                        """, this::mapTask)
+                        """, this::mapTask, leaseOwner)
                 .stream()
                 .findFirst();
     }
@@ -99,6 +128,56 @@ public class RuntimeStore {
                 WHERE id = ? AND status = ? AND version = ?
                 """, next.name(), jsonOrNull(output), task.id(), task.status().name(), task.version());
         requireSingleUpdate(updated, "Task", task.id());
+    }
+
+    /** Transitions a task only while the supplied worker still owns a live lease. */
+    public boolean tryTransitionTaskOwned(
+            TaskRecord task,
+            TaskStatus next,
+            JsonNode output,
+            String leaseOwner
+    ) {
+        task.status().requireTransitionTo(next);
+        int updated = jdbc.update("""
+                UPDATE tasks
+                SET status = ?,
+                    output = CAST(? AS jsonb),
+                    lease_owner = CASE WHEN ? IN ('SUCCEEDED', 'FAILED') THEN NULL ELSE lease_owner END,
+                    lease_expires_at = CASE WHEN ? IN ('SUCCEEDED', 'FAILED') THEN NULL ELSE lease_expires_at END,
+                    version = version + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND status = ?
+                  AND version = ?
+                  AND lease_owner = ?
+                  AND lease_expires_at > CURRENT_TIMESTAMP
+                """, next.name(), jsonOrNull(output), next.name(), next.name(), task.id(),
+                task.status().name(), task.version(), leaseOwner);
+        return updated == 1;
+    }
+
+    /** Returns expired leased tasks to the queue and clears their ownership. */
+    public List<TaskRecord> requeueExpiredLeases() {
+        List<TaskRecord> expired = jdbc.query("""
+                SELECT * FROM tasks
+                WHERE status IN ('LEASED', 'EXECUTING')
+                  AND lease_expires_at <= CURRENT_TIMESTAMP
+                ORDER BY lease_expires_at, id
+                FOR UPDATE SKIP LOCKED
+                """, this::mapTask);
+        for (TaskRecord task : expired) {
+            jdbc.update("""
+                    UPDATE tasks
+                    SET status = 'PENDING',
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        next_attempt_at = CURRENT_TIMESTAMP,
+                        version = version + 1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND version = ?
+                    """, task.id(), task.version());
+        }
+        return expired;
     }
 
     public void appendEvent(
@@ -152,6 +231,11 @@ public class RuntimeStore {
                 TaskStatus.valueOf(rs.getString("status")),
                 jsonNode(rs.getString("input")),
                 jsonNode(rs.getString("output")),
+                rs.getString("lease_owner"),
+                instantOrNull(rs, "lease_expires_at"),
+                rs.getInt("attempt"),
+                rs.getInt("max_attempts"),
+                instant(rs, "next_attempt_at"),
                 rs.getLong("version"),
                 instant(rs, "created_at"),
                 instant(rs, "updated_at")
@@ -198,6 +282,11 @@ public class RuntimeStore {
     private Instant instant(ResultSet rs, String column) throws SQLException {
         Timestamp value = rs.getTimestamp(column);
         return value.toInstant();
+    }
+
+    private Instant instantOrNull(ResultSet rs, String column) throws SQLException {
+        Timestamp value = rs.getTimestamp(column);
+        return value == null ? null : value.toInstant();
     }
 
     private <T> Optional<T> queryOne(String sql, org.springframework.jdbc.core.RowMapper<T> mapper, Object... args) {

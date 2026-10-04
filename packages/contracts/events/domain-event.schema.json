@@ -49,6 +49,7 @@
         "RunFailed",
         "TaskCreated",
         "TaskLeased",
+        "TaskLeaseExpired",
         "TaskExecuting",
         "TaskSucceeded",
         "TaskFailed"
@@ -63,4 +64,3 @@
     }
   }
 }
-

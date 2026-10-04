@@ -32,6 +32,11 @@ public final class Records {
             TaskStatus status,
             JsonNode input,
             JsonNode output,
+            String leaseOwner,
+            Instant leaseExpiresAt,
+            int attempt,
+            int maxAttempts,
+            Instant nextAttemptAt,
             long version,
             Instant createdAt,
             Instant updatedAt
@@ -51,4 +56,3 @@ public final class Records {
     ) {
     }
 }
-

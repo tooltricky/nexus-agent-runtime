@@ -1,13 +1,13 @@
 # Nexus Agent Runtime
 
-Nexus Agent Runtime 的第一个可运行纵向切片：创建 Session 和幂等 Run，由进程内 fake worker 执行固定 Task，并从 PostgreSQL 查询完整事件时间线。
+Nexus Agent Runtime 的第一个可运行纵向切片：创建 Session 和幂等 Run，由进程内 fake worker 通过真实 Task Lease 执行固定 Task，支持租约过期回收，并从 PostgreSQL 查询完整事件时间线。
 
 ## 范围
 
 - Spring Boot 3 + Java 21 模块化单体
 - PostgreSQL 持久化和 Flyway 迁移
 - Run 与 Task 显式状态机
-- 数据库任务领取和可重启的 fake worker
+- 基于真实 Task Lease 的数据库任务领取和可重启 fake worker
 - append-only `domain_events` 时间线
 - OpenAPI 3.1 和 JSON Schema 合约
 - Docker Compose 一键启动
@@ -68,6 +68,11 @@ curl -sS http://localhost:8080/v1/runs/<run_id>/timeline
 RunCreated -> TaskCreated -> RunQueued -> TaskLeased
            -> RunStarted -> TaskExecuting -> TaskSucceeded -> RunSucceeded
 ```
+
+任务领取时会原子写入 `lease_owner`、`lease_expires_at` 和 `attempt`。只有租约持有者
+且租约未过期时，worker 才能推进任务到 `EXECUTING` 或 `SUCCEEDED`。watchdog 会在轮询时
+将过期的 `LEASED`/`EXECUTING` 任务清除租约并重新放回 `PENDING` 队列，同时记录
+`TaskLeaseExpired` 事件。租约时长可通过 `FAKE_WORKER_LEASE_DURATION_MS` 配置，默认 30 秒。
 
 验证重启持久化：
 

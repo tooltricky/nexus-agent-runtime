@@ -13,8 +13,8 @@ public enum TaskStatus {
 
     private static final Map<TaskStatus, Set<TaskStatus>> TRANSITIONS = Map.of(
             PENDING, EnumSet.of(LEASED),
-            LEASED, EnumSet.of(EXECUTING),
-            EXECUTING, EnumSet.of(SUCCEEDED, FAILED),
+            LEASED, EnumSet.of(PENDING, EXECUTING),
+            EXECUTING, EnumSet.of(PENDING, SUCCEEDED, FAILED),
             SUCCEEDED, EnumSet.noneOf(TaskStatus.class),
             FAILED, EnumSet.noneOf(TaskStatus.class)
     );
@@ -25,4 +25,3 @@ public enum TaskStatus {
         }
     }
 }
-

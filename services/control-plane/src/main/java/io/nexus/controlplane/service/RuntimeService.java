@@ -133,6 +133,11 @@ public class RuntimeService {
                 task.status(),
                 task.input(),
                 task.output(),
+                task.leaseOwner(),
+                task.leaseExpiresAt(),
+                task.attempt(),
+                task.maxAttempts(),
+                task.nextAttemptAt(),
                 task.createdAt(),
                 task.updatedAt()
         );
@@ -168,4 +173,3 @@ public class RuntimeService {
         return objectMapper.createObjectNode().put("from", from).put("to", to);
     }
 }
-
