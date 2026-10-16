@@ -29,3 +29,5 @@ nexus:
     enabled: ${FAKE_WORKER_ENABLED:true}
     poll-delay-ms: ${FAKE_WORKER_POLL_DELAY_MS:200}
     lease-duration-ms: ${FAKE_WORKER_LEASE_DURATION_MS:30000}
+    retry-initial-delay-ms: ${FAKE_WORKER_RETRY_INITIAL_DELAY_MS:1000}
+    retry-max-delay-ms: ${FAKE_WORKER_RETRY_MAX_DELAY_MS:30000}

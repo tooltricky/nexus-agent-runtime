@@ -50,6 +50,7 @@
         "TaskCreated",
         "TaskLeased",
         "TaskLeaseExpired",
+        "TaskRetried",
         "TaskExecuting",
         "TaskSucceeded",
         "TaskFailed"

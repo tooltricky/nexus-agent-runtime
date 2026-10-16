@@ -132,7 +132,7 @@ components:
       enum: [CREATED, QUEUED, RUNNING, SUCCEEDED, FAILED]
     TaskStatus:
       type: string
-      enum: [PENDING, LEASED, EXECUTING, SUCCEEDED, FAILED]
+      enum: [PENDING, LEASED, EXECUTING, RETRYING, SUCCEEDED, FAILED]
     Task:
       type: object
       required: [task_id, name, status, input, created_at, updated_at]
@@ -156,12 +156,15 @@ components:
           type: string
           format: date-time
         attempt:
+          description: Total lease claims, including the initial attempt.
           type: integer
           minimum: 0
         max_attempts:
+          description: Maximum total attempts, including the initial attempt (default 3).
           type: integer
           minimum: 1
         next_attempt_at:
+          description: A RETRYING Task cannot be leased before this time.
           type: string
           format: date-time
         created_at:

@@ -1,0 +1,30 @@
+name: nexus-retry-tests
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nexus_test
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: nexus
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus -d nexus_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  tests:
+    image: maven:3.9.11-eclipse-temurin-21
+    working_dir: /workspace
+    volumes:
+      - ../services/control-plane:/workspace
+    environment:
+      TEST_DB_URL: jdbc:postgresql://postgres:5432/nexus_test
+      TEST_DB_USERNAME: nexus
+      TEST_DB_PASSWORD: nexus
+    command: ["mvn", "-B", "--no-transfer-progress", "-Dmaven.repo.local=/workspace/target/maven-repository", "test"]
+    depends_on:
+      postgres:
+        condition: service_healthy

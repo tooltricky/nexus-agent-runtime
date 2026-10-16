@@ -1,5 +1,6 @@
 package io.nexus.controlplane.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.nexus.controlplane.domain.Records.RunRecord;
@@ -7,45 +8,43 @@ import io.nexus.controlplane.domain.Records.TaskRecord;
 import io.nexus.controlplane.domain.RunStatus;
 import io.nexus.controlplane.domain.TaskStatus;
 import io.nexus.controlplane.persistence.RuntimeStore;
+import io.nexus.controlplane.persistence.RuntimeStore.TaskClaim;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Duration;
-import java.util.List;
 
 @Service
 @ConditionalOnProperty(name = "nexus.worker.enabled", havingValue = "true", matchIfMissing = true)
 public class FakeWorkerService {
-    private static final String SUMMARY = "发现错误率上升，需要进一步检查最近发布";
-
     private final RuntimeStore store;
     private final ObjectMapper objectMapper;
     private final String workerId = Ids.workerId();
     private final long leaseDurationMs;
+    private final TaskFailureService failures;
+    private final TaskExecutor executor;
 
-    @Autowired
     public FakeWorkerService(
             RuntimeStore store,
             ObjectMapper objectMapper,
+            TaskFailureService failures,
+            TaskExecutor executor,
             @Value("${nexus.worker.lease-duration-ms:30000}") long leaseDurationMs
     ) {
         this.store = store;
         this.objectMapper = objectMapper;
         this.leaseDurationMs = leaseDurationMs;
-    }
-
-    public FakeWorkerService(RuntimeStore store, ObjectMapper objectMapper) {
-        this(store, objectMapper, 30_000L);
+        this.failures = failures;
+        this.executor = executor;
     }
 
     @Scheduled(fixedDelayString = "${nexus.worker.poll-delay-ms:200}")
     @Transactional
     public void advanceOneTask() {
-        recoverExpiredLeases();
+        failures.recoverExpiredLeases();
         store.findOwnedActiveTaskForUpdate(workerId)
                 .ifPresentOrElse(this::advance, this::claimAndAdvance);
     }
@@ -62,8 +61,9 @@ public class FakeWorkerService {
         }
     }
 
-    private void leased(TaskRecord task) {
-        appendTaskLease(task);
+    private void leased(TaskClaim claim) {
+        TaskRecord task = claim.task();
+        appendTaskLease(task, claim.previousStatus());
         RunRecord run = requiredRun(task.runId());
         if (run.status() == RunStatus.QUEUED) {
             store.transitionRun(run, RunStatus.RUNNING, null);
@@ -87,7 +87,13 @@ public class FakeWorkerService {
     }
 
     private void succeed(TaskRecord task) {
-        ObjectNode output = objectMapper.createObjectNode().put("summary", SUMMARY);
+        JsonNode output;
+        try {
+            output = executor.execute(task);
+        } catch (RuntimeException failure) {
+            failures.failOwnedTask(task, workerId, failure.toString());
+            return;
+        }
         if (!store.tryTransitionTaskOwned(task, TaskStatus.SUCCEEDED, output, workerId)) {
             return;
         }
@@ -114,23 +120,7 @@ public class FakeWorkerService {
         );
     }
 
-    private void recoverExpiredLeases() {
-        List<TaskRecord> expired = store.requeueExpiredLeases();
-        for (TaskRecord task : expired) {
-            store.appendEvent(
-                    Ids.eventId(),
-                    "TASK",
-                    task.id(),
-                    task.runId(),
-                    task.id(),
-                    "TaskLeaseExpired",
-                    transitionPayload(task.status().name(), TaskStatus.PENDING.name())
-                            .put("previous_lease_owner", task.leaseOwner())
-            );
-        }
-    }
-
-    private void appendTaskLease(TaskRecord task) {
+    private void appendTaskLease(TaskRecord task, TaskStatus previousStatus) {
         store.appendEvent(
                 Ids.eventId(),
                 "TASK",
@@ -138,7 +128,7 @@ public class FakeWorkerService {
                 task.runId(),
                 task.id(),
                 "TaskLeased",
-                transitionPayload(TaskStatus.PENDING.name(), TaskStatus.LEASED.name())
+                transitionPayload(previousStatus.name(), TaskStatus.LEASED.name())
                         .put("lease_owner", task.leaseOwner())
                         .put("attempt", task.attempt())
                         .put("max_attempts", task.maxAttempts())

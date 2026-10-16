@@ -70,29 +70,34 @@ public class RuntimeStore {
         return jdbc.query("SELECT * FROM tasks WHERE run_id = ? ORDER BY created_at, id", this::mapTask, runId);
     }
 
+    public record TaskClaim(TaskRecord task, TaskStatus previousStatus) {
+    }
+
     /** Atomically claims the oldest task ready to run and writes its lease. */
-    public Optional<TaskRecord> claimNextTask(String leaseOwner, Duration leaseDuration) {
+    public Optional<TaskClaim> claimNextTask(String leaseOwner, Duration leaseDuration) {
         long leaseMillis = leaseDuration.toMillis();
         return jdbc.query("""
                         WITH candidate AS (
-                            SELECT id
+                            SELECT id, status AS previous_status
                             FROM tasks
-                            WHERE status = 'PENDING'
-                              AND next_attempt_at <= CURRENT_TIMESTAMP
+                            WHERE status IN ('PENDING', 'RETRYING')
+                              AND next_attempt_at <= clock_timestamp()
                             ORDER BY created_at, id
                             FOR UPDATE SKIP LOCKED
                             LIMIT 1
                         )
-                        UPDATE tasks
+                        UPDATE tasks AS task
                         SET status = 'LEASED',
                             lease_owner = ?,
-                            lease_expires_at = CURRENT_TIMESTAMP + (? * INTERVAL '1 millisecond'),
+                            lease_expires_at = clock_timestamp() + (? * INTERVAL '1 millisecond'),
                             attempt = attempt + 1,
                             version = version + 1,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE id = (SELECT id FROM candidate)
-                        RETURNING *
-                        """, this::mapTask, leaseOwner, leaseMillis)
+                        FROM candidate
+                        WHERE task.id = candidate.id
+                        RETURNING task.*, candidate.previous_status
+                        """, (rs, rowNum) -> new TaskClaim(mapTask(rs, rowNum),
+                                TaskStatus.valueOf(rs.getString("previous_status"))), leaseOwner, leaseMillis)
                 .stream()
                 .findFirst();
     }
@@ -150,34 +155,43 @@ public class RuntimeStore {
                   AND status = ?
                   AND version = ?
                   AND lease_owner = ?
-                  AND lease_expires_at > CURRENT_TIMESTAMP
+                  AND lease_expires_at > clock_timestamp()
                 """, next.name(), jsonOrNull(output), next.name(), next.name(), task.id(),
                 task.status().name(), task.version(), leaseOwner);
         return updated == 1;
     }
 
-    /** Returns expired leased tasks to the queue and clears their ownership. */
-    public List<TaskRecord> requeueExpiredLeases() {
-        List<TaskRecord> expired = jdbc.query("""
+    /** Locks expired attempts for the watchdog; state and events are committed by the caller. */
+    public List<TaskRecord> findExpiredLeasesForUpdate() {
+        return jdbc.query("""
                 SELECT * FROM tasks
                 WHERE status IN ('LEASED', 'EXECUTING')
-                  AND lease_expires_at <= CURRENT_TIMESTAMP
+                  AND lease_expires_at <= clock_timestamp()
                 ORDER BY lease_expires_at, id
                 FOR UPDATE SKIP LOCKED
                 """, this::mapTask);
-        for (TaskRecord task : expired) {
-            jdbc.update("""
-                    UPDATE tasks
-                    SET status = 'PENDING',
-                        lease_owner = NULL,
-                        lease_expires_at = NULL,
-                        next_attempt_at = CURRENT_TIMESTAMP,
-                        version = version + 1,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND version = ?
-                    """, task.id(), task.version());
-        }
-        return expired;
+    }
+
+    public Optional<TaskRecord> finishFailedAttempt(
+            TaskRecord task, String leaseOwner, Duration retryDelay, boolean expired
+    ) {
+        TaskStatus next = task.attempt() < task.maxAttempts() ? TaskStatus.RETRYING : TaskStatus.FAILED;
+        task.status().requireTransitionTo(next);
+        // Expiry recovery and worker failure reporting use mutually exclusive lease predicates.
+        String leasePredicate = expired
+                ? "lease_expires_at <= clock_timestamp()"
+                : "lease_expires_at > clock_timestamp()";
+        return jdbc.query("""
+                UPDATE tasks
+                SET status = ?, output = NULL,
+                    lease_owner = NULL, lease_expires_at = NULL,
+                    next_attempt_at = clock_timestamp() + (? * INTERVAL '1 millisecond'),
+                    version = version + 1, updated_at = clock_timestamp()
+                WHERE id = ? AND status = ? AND version = ? AND lease_owner = ?
+                  AND %s
+                RETURNING *
+                """.formatted(leasePredicate), this::mapTask, next.name(), retryDelay.toMillis(),
+                task.id(), task.status().name(), task.version(), leaseOwner).stream().findFirst();
     }
 
     public void appendEvent(
