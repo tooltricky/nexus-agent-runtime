@@ -4,6 +4,8 @@
 
 盘点日期：2026-10-21。代码基线：`main` 分支，提交 `673bfc9ea0e3f38685e658e267dd06f8c07a400a`。本次只做静态阅读和任务规划，没有启动服务或运行测试；下面的“已实现”表示代码和相关文件已存在，不代表本轮验证通过。
 
+2026-10-22 更新：B01 已实现并通过独立 PostgreSQL 验证，下面的幂等及测试条目已同步；实际命令、结果与审查基线见“当前任务”和“进度记录”。其他能力的盘点仍沿用上述静态阅读结论。
+
 已阅读：
 
 - [README](../README.md)：当前可运行范围、演示和独立数据库测试方法。
@@ -22,7 +24,7 @@
 | --- | --- | --- |
 | 工程和开发环境 | Spring Boot 3.5.6 / Java 21；JDBC、Flyway；Dockerfile；应用与 PostgreSQL Compose；健康检查 | 一个 Java 服务，无其他业务服务或 Kubernetes 部署 |
 | Session / Run 基础 API | `SessionController`、`RunController`、`RuntimeService`；创建 Session、创建 Run、查询 Run / Task、查询时间线四个接口 | Session 只有 ID 和创建时间；没有列表、租户、项目、上下文、预算或执行配置 |
-| Run 创建幂等 | 全局唯一 `Idempotency-Key`，Session 与 input 的 SHA-256 请求摘要；同请求返回原 Run，不同请求返回 409 | 未按租户隔离；现有测试没有直接覆盖 HTTP 幂等和并发创建 |
+| Run 创建幂等 | 全局唯一 `Idempotency-Key`，Session 与 input 的 SHA-256 请求摘要；同请求返回原 Run，不同请求返回 409；B01 已覆盖 HTTP 顺序及并发幂等 | 未按租户隔离 |
 | 状态与持久化 | `RunStatus`、`TaskStatus`；V1–V3 迁移；带版本与预期状态的更新；聚合状态和事件同事务提交 | Run 只有 CREATED / QUEUED / RUNNING / SUCCEEDED / FAILED；数据库 `one_task_per_run` 强制每 Run 一个 Task |
 | 可恢复的任务领取 | `RuntimeStore.claimNextTask` 用 `FOR UPDATE SKIP LOCKED` 原子领取；持久化 owner、expiry、attempt 和 next_attempt_at | PostgreSQL 同时充当队列；worker 是进程内定时器，没有独立执行进程和真实 Sandbox |
 | 租约所有权与过期回收 | 推进和失败报告校验 owner、version、状态及数据库实时时钟；watchdog 回收过期 LEASED / EXECUTING | 没有心跳续租；watchdog 随 fake worker 轮询运行，停用 worker 也就没有该定时回收入口 |
@@ -30,7 +32,7 @@
 | 可替换的假执行器 | `TaskExecutor` 接口与 `FakeTaskExecutor`；固定 Task 名和固定 summary | 没有模型请求、Tool Calling、MCP 或真实诊断；执行器目前在持有任务行锁的数据库事务中调用 |
 | 事件时间线 | `domain_events`；唯一 event_id、数据库 sequence；触发器拒绝 UPDATE / DELETE；按 Run 排序查询 | 不是事件溯源系统；没有事件发布、Schema 版本、分页、SSE、OTel 或 Replay；防修改触发器不是完整审计系统 |
 | 合约文件 | OpenAPI 3.1 与领域事件 JSON Schema | 有文件，尚无自动合约验证；事件 payload 只是通用 object，OpenAPI 也没有覆盖全部校验错误 |
-| 测试与测试环境 | 4 个测试类：Run / Task 状态机、退避策略、PostgreSQL 重试集成测试；独立临时数据库 Compose | 集成测试覆盖重试成功、耗尽、租约过期、迟到 / 重复报告、竞争、回滚、成功不再执行；未设置 TEST_DB_URL 会跳过；没有 CI 文件 |
+| 测试与测试环境 | 7 个测试类，共 31 项：状态机、退避策略、HTTP、并发领取与事件不可变、应用重启、重试；复用独立临时数据库 Compose，B01 验证全部通过且无跳过 | 未设置 TEST_DB_URL 仍会跳过集成测试；没有自动合约验证和 CI，留给 B02 / B03 |
 
 ## 还缺什么
 
@@ -49,7 +51,7 @@
 
 ## 任务执行规则
 
-- 所有 B 编号任务初始均为“待办”；编号给出推荐开发顺序，“依赖”列列出主要直接依赖。一次只选一个任务，完成后再选下一项。
+- B01 已完成实现和自动测试，其余 B 编号任务仍为“待办”；编号给出推荐开发顺序，“依赖”列列出主要直接依赖。一次只选一个任务，完成后再选下一项。
 - 每项都要形成独立、可审查的交付。表中“做什么”是范围，“怎样检查完成”是必须满足的验收条件；不是看到类名、接口或配置文件就算完成。
 - 功能有数据库、状态、HTTP 或事件变化时，同步更新迁移、OpenAPI / JSON Schema、必要测试和 README；不回改已经应用的 V1–V3 迁移。新增状态不能只改 Java 枚举。
 - 数据库验证使用 README 的独立测试库：`docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests`，检查测试报告确认数据库集成测试实际执行、未被跳过，再用同一 Compose 文件 `down` 清理。禁止连接演示或业务数据库跑清表测试。
@@ -169,23 +171,26 @@
 
 ## 当前任务
 
-已选择 **B01：现有纵向切片回归测试**，方案已确认并记录，尚未开始实现。本轮仅更新任务文档，不修改功能或测试代码。
+已完成 **B01：现有纵向切片回归测试** 的实现和自动测试；用户确认人工验收与独立审查均已进行，当前尚未提交。本轮仅实施 B01，不自动开始 B02。
 
-下列分支和完整提交编号是本次更新任务文档前重新读取的结果。正式开始修改代码前再次核对；若分支或 HEAD 已变化，先更新记录，供后续审查定位全部任务改动（包括未提交和新建文件）。
+下列分支和完整提交编号已在本次开始修改代码前重新读取，供后续审查定位全部任务改动（包括未提交和新建文件）。
 
 | 字段 | 内容 |
 | --- | --- |
 | 任务编号 / 名称 | B01：现有纵向切片回归测试 |
-| 状态 | 方案已确认，待实现；本轮仅记录任务 |
+| 状态 | 实现及自动测试通过，本轮自查通过；人工验收与独立审查已进行（用户确认），尚未提交 |
 | 目标与范围 | 用自动测试证明现有“创建 Session → 创建 Run → fake worker 执行 → 查询结果和时间线”闭环可靠；补齐 HTTP 成功、幂等与并发创建、请求校验、404 / 409、并发领取、重启持久化与接管、事件禁止修改。复用已有重试测试；自动合约验证与 CI 分别留给 B02、B03。 |
 | 实现方案 / 预计修改位置 | ① 在 `services/control-plane/src/test/java/io/nexus/controlplane/api/` 新增 HTTP 集成测试（暂名 `RuntimeHttpIntegrationTest.java`），启动真实 HTTP 服务连接独立 PostgreSQL，检查四个接口、错误返回和并发幂等请求。② 在同一测试根目录的 `service/` 下扩展或新增数据库集成测试，复用 `TaskRetryIntegrationTest.java` 的清表、建 Run、事务推进、并发同步和时间线校验逻辑；只抽取必要的公共测试辅助代码。③ 并发领取使用不同 Worker 实例和独立事务；通过同步信号和有上限的等待控制竞争，检查数据库最终记录。④ 重启测试关闭并重建应用实例，保留同一个测试数据库，验证已完成结果和事件仍在，以及排队或持有旧租约的任务可由新 Worker 继续处理；不能只新建 Worker 就算验证应用重启。⑤ 直接对已有事件执行 UPDATE / DELETE，确认数据库拒绝且原记录不变。⑥ 更新 `README.md` 的测试覆盖说明和本文进度；复用 `deploy/docker-compose.test.yml`。预计不新增迁移或改变合约；如测试暴露缺陷，仅对相关 Controller、`ApiExceptionHandler`、`RuntimeService`、`RuntimeStore` 或 `FakeWorkerService` 做必要修复，若涉及 HTTP / 事件变化则同步文档和合约，不扩大到后续任务。 |
 | 验收条件 | ① HTTP 创建 Session 返回 201，创建 Run 返回 202，查询返回 200；Run / Task 最终均为 SUCCEEDED，输出为 `{"summary":"发现错误率上升，需要进一步检查最近发布"}`；时间线严格为 RunCreated → TaskCreated → RunQueued → TaskLeased → RunStarted → TaskExecuting → TaskSucceeded → RunSucceeded，事件 ID 无重复、sequence 递增。② 顺序重复及并发同键同请求均返回同一 run_id，数据库仅一个 Run、一个 Task 和一组创建事件；同键不同 input 或不同有效 Session 时仅一份请求内容胜出，其他返回 409，不留下多余 Task / 事件。③ 缺失、空白或超过 255 字符的幂等键，缺失或空白的 session_id / input，以及无法解析的 JSON 返回 400；不存在的 Session 创建 Run、查询不存在的 Run 或时间线返回 404；错误响应有对应错误码，失败请求不新增业务记录。④ 多个 Worker 同时竞争单个及多个就绪 Task，每个 Task 同时最多一个有效租约，首次领取 attempt 为 1，不重复记录领取事件；完成后不能再领取。⑤ 关闭并重建应用后，原成功 Run 的结果和事件保持不变且不重跑；排队任务能继续执行，LEASED / EXECUTING 任务的旧租约有效时不被抢走，过期后按 ADR 0003 先回收并退避、到期后由新 owner 接管，attempt 递增且旧 owner 的迟到结果不能生效。⑥ 对已有事件 UPDATE / DELETE 均被数据库拒绝，之后读取的数量和内容不变。⑦ 原有状态机、退避和重试测试继续通过；独立 PostgreSQL 测试报告中相关集成测试确实执行，失败和错误为 0、跳过为 0。 |
-| 实施分支 | `main`（记录时当前分支；尚未开始修改代码） |
-| 开始修改前的提交编号 | `2c40afba9dbc99bef6f201c6ee45918689408b6f`（记录任务文档前的 HEAD；实现前再次核对） |
-| 实际测试命令与结果 | 未运行。本轮只更新文档。实现后计划执行 `docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests`，检查 `services/control-plane/target/surefire-reports/` 确认数据库集成测试实际执行、未跳过，再执行 `docker compose -f deploy/docker-compose.test.yml down` 清理。 |
-| 人工验收 / 独立审查结果 | 未进行 |
-| 已知问题与未运行检查 | 尚未运行构建、应用、单元或数据库集成测试；本表验收条件均为待验证目标，不能视为已通过。数据库测试会清表，只能使用独立测试库。 |
-| 下一步 | 等待用户发出实现指令后，只实施 B01；开始修改代码前重新核对分支和完整提交编号，完成后记录实际验证结果，不自动开始 B02。 |
+| 实施分支 | `main`（2026-10-22 实施前重新核对，工作区干净） |
+| 开始修改前的提交编号 | `6a0a8eedba6b32525e6ef91888148853bdf40a99`（2026-10-22 实施前重新核对；包含本任务全部后续未提交和新建文件） |
+| 实际修改 | 新增 `RuntimeHttpIntegrationTest`（7 项）、`RuntimePersistenceIntegrationTest`（3 项）、`RuntimeRestartIntegrationTest`（3 项）及 `RuntimeTestSupport`；原 `TaskRetryIntegrationTest` 复用清表和有超时的并发同步辅助方法。HTTP 测试使用随机端口真实服务和主动事务推进，重启测试关闭并重建整个应用上下文及连接池，并启用定时 worker 验证排队任务自动执行。仅修改测试、README 和本文，无生产代码、迁移或合约变更。 |
+| 实际测试命令与结果 | 2026-10-22 执行 `docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests`。首次基线 18 项通过；新增测试首次编译因泛型推断失败，修正响应列表显式类型后重跑，最终 BUILD SUCCESS：31 项，失败 0、错误 0、跳过 0。已逐一读取 `services/control-plane/target/surefire-reports/*.txt`：HTTP 7、领取及不可变事件 3、应用重启 3、原重试 10、单元测试 8，确认全部数据库测试实际执行。已执行同一 Compose 的 `down`，删除测试容器和网络；另执行 `git diff --check`。 |
+| 本轮修改检查 | 已检查起始提交之后的全部已跟踪差异及新增测试文件，对照 B01 验收条件和 ADR 0003 核对 HTTP 校验、幂等竞争、独立事务领取、应用上下文重建、租约回收退避、迟到报告围栏及事件不可变断言，未发现需要修复的 B01 问题。已重新核对 7 份 Surefire 文本报告，合计 31 项，失败 / 错误 / 跳过均为 0；`git diff --check` 通过。本轮仅补充任务记录，未修改测试代码、未重复运行测试。此检查为实现会话自查，不替代独立审查。 |
+| 人工验收 / 独立审查结果 | 用户确认两项均已进行；本会话未收到具体审查报告或新增待修复问题，不另行推断审查结论。 |
+| 建议提交消息 | `test(control-plane): 补齐 B01 纵向切片回归测试`；内容包含 HTTP 与并发幂等、并发领取、应用重启接管、事件不可变测试，复用测试辅助逻辑并更新测试说明与任务记录。尚未执行 git commit。 |
+| 已知问题与未运行检查 | 当前 B01 自动测试及本轮自查未发现功能缺陷，未收到新增待修复问题。应用重启验证为同 JVM 内关闭并重建整个 Spring 上下文及连接池，未另做容器强杀或进程崩溃演练；租约及退避用测试库时间字段推进。自动合约校验和 CI 尚未实现，分别属于 B02 / B03。未设置 TEST_DB_URL 时仍会跳过集成测试，数据库测试只能使用独立测试库且测试类不可并行清表。 |
+| 下一步 | 用户确认后提交本次改动；如有新增审查问题，仅修复 B01 并重跑相关测试。B02 仍待另行选择和确认，不自动开始。 |
 
 ## 进度记录
 
@@ -193,3 +198,6 @@
 | --- | --- | --- | --- |
 | 2026-10-21 | 阅读 README、设计、3 篇 ADR、工作流和现有代码，建立 B01–B63 待办 | 仅新增本文档；未修改生产代码、测试、合约或部署配置；本轮未运行构建、应用或数据库测试，已有能力按静态证据盘点 | 选择并讨论 B01，确认后填写“当前任务” |
 | 2026-10-22 | 确认 B01 方案并填写“当前任务”，重新读取当前分支和完整 HEAD | 仅更新本文档，记录目标、预计修改位置、实现方案、验收条件及审查基线；未实现功能，未运行测试 | 等待实现指令，实施前再次核对分支与起始提交 |
+| 2026-10-22 | 完成 B01 回归测试及文档；实施基线为 main / 6a0a8eedba6b32525e6ef91888148853bdf40a99 | 新增 HTTP、并发领取、应用重启与事件不可变测试，共增加 13 项；复用原重试辅助代码。独立 PostgreSQL Compose 全部 31 项通过，失败 / 错误 / 跳过均为 0，报告已检查，测试容器及网络已清理；生产代码、合约和迁移无变化 | 待人工验收与独立审查；不自动开始 B02 |
+| 2026-10-22 | 提交前自查并整理提交消息 | 已检查全部改动和新文件，未发现待修复的 B01 问题；重新核对现有测试报告仍为 31 项全通过、无跳过，差异格式检查通过。本轮只更新任务记录，未重跑测试、未提交代码；人工验收和独立审查尚未进行 | 完成人工验收与独立审查，用户确认后提交；不自动开始 B02 |
+| 2026-10-22 | 根据用户确认更新验收与审查记录 | 用户确认人工验收与独立审查均已进行，修正此前“尚未进行”的当前状态；本会话未收到具体报告或新增待修复问题。自动测试结果仍为 31 项通过、失败 / 错误 / 跳过均为 0，本轮仅更新文档 | 用户确认后提交；不自动开始 B02 |

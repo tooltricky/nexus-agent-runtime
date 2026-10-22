@@ -120,8 +120,25 @@ docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --
 docker compose -f deploy/docker-compose.test.yml down
 ```
 
-测试覆盖退避到期前不可领取、重试成功、耗尽失败、`LEASED`/`EXECUTING` 租约过期、
-重复与迟到报告、多个 watchdog 竞争、成功与失败竞争、事务回滚和成功任务不再执行。
+测试覆盖如下场景：
+
+- 真实 HTTP 服务的四个接口、固定成功输出、完整有序时间线、请求校验和 400 / 404 / 409 错误码。
+- 顺序和并发幂等创建；同键不同 input 或有效 Session 的竞争只保留一个 Run / Task 和一组创建事件。
+- 多个独立 worker 通过独立事务竞争单个或多个 Task，每个 Task 只领取一次，完成后不再执行。
+- 关闭并重建整个 Spring 应用上下文及连接池后，成功结果和事件保持不变，定时 worker 继续处理排队任务；
+  `LEASED` / `EXECUTING` 的有效旧租约受到保护，过期后先回收并退避，再由新 owner 接管，拒绝旧 owner 的迟到报告。
+- 数据库拒绝事件 UPDATE / DELETE，原时间线的数量和内容不变。
+- 退避到期前不可领取、重试成功、耗尽失败、租约过期、重复与迟到报告、多个 watchdog 竞争、
+  成功与失败竞争、事务回滚和成功任务不再执行。
+
+HTTP 回归测试为避免后台调度干扰并发创建断言，禁用定时 worker，通过独立事务主动推进真实 fake worker；
+重启测试另行启用真实定时 worker 验证自动执行。租约和退避测试直接调整独立测试库的时间字段，避免长时间等待。
+共享清表和有超时的并发同步辅助代码位于 `src/test/java/io/nexus/controlplane/support/RuntimeTestSupport.java`。
+测试类共享同一测试库，不能并行运行这些集成测试类。
+
+运行后检查 `services/control-plane/target/surefire-reports/` 下的报告：B01 验证时共 31 项，
+其中 HTTP 7 项、数据库领取和事件不可变 3 项、应用重启 3 项、原重试集成 10 项、单元测试 8 项，
+失败 / 错误 / 跳过均为 0。没有设置 `TEST_DB_URL` 的单元测试运行不能代替这次独立数据库验证。
 
 ## 目录
 

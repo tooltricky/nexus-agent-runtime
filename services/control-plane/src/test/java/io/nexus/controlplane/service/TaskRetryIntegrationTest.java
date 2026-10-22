@@ -23,13 +23,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static io.nexus.controlplane.support.RuntimeTestSupport.clearDatabase;
+import static io.nexus.controlplane.support.RuntimeTestSupport.race;
 
 /** Runs only against an explicitly supplied, disposable PostgreSQL database. */
 @EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
@@ -55,7 +54,7 @@ class TaskRetryIntegrationTest {
     @BeforeEach
     void createRun() {
         tx = new TransactionTemplate(transactionManager);
-        jdbc.execute("TRUNCATE domain_events, tasks, runs, sessions");
+        clearDatabase(jdbc);
         String sessionId = runtime.createSession().sessionId();
         runId = runtime.createRun(UUID.randomUUID().toString(), new CreateRunRequest(sessionId, "test")).runId();
     }
@@ -283,17 +282,6 @@ class TaskRetryIntegrationTest {
         race(failures::recoverExpiredLeases, failures::recoverExpiredLeases);
         assertThat(task().status()).isEqualTo(TaskStatus.RETRYING);
         assertThat(eventTypes()).containsOnlyOnce("TaskLeaseExpired", "TaskRetried");
-    }
-
-    private void race(Runnable first, Runnable second) throws Exception {
-        CountDownLatch start = new CountDownLatch(1);
-        try (var threads = Executors.newFixedThreadPool(2)) {
-            var a = threads.submit(() -> { start.await(); first.run(); return null; });
-            var b = threads.submit(() -> { start.await(); second.run(); return null; });
-            start.countDown();
-            a.get(10, TimeUnit.SECONDS);
-            b.get(10, TimeUnit.SECONDS);
-        }
     }
 
     private FakeWorkerService successfulWorker() {
