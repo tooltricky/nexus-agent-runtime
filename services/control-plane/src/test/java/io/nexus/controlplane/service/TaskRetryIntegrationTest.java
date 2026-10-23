@@ -7,6 +7,7 @@ import io.nexus.controlplane.domain.Records.TaskRecord;
 import io.nexus.controlplane.domain.RunStatus;
 import io.nexus.controlplane.domain.TaskStatus;
 import io.nexus.controlplane.persistence.RuntimeStore;
+import io.nexus.controlplane.support.ContractAssertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -67,6 +68,7 @@ class TaskRetryIntegrationTest {
         assertThat(timeline).extracting(EventRecord::sequence).isSorted().doesNotHaveDuplicates();
         assertThat(timeline).extracting(EventRecord::eventId).doesNotHaveDuplicates();
         for (EventRecord event : timeline) {
+            ContractAssertions.event(mapper.valueToTree(event));
             if (!event.payload().has("from")) {
                 continue;
             }

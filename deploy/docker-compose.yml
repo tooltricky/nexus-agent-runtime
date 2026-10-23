@@ -17,7 +17,8 @@ services:
 
   control-plane:
     build:
-      context: ../services/control-plane
+      context: ..
+      dockerfile: services/control-plane/Dockerfile
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/nexus
       DB_USERNAME: nexus

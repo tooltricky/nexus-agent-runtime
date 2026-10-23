@@ -3,6 +3,9 @@ package io.nexus.controlplane.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.nexus.controlplane.persistence.RuntimeStore;
+import io.nexus.controlplane.support.ContractAssertions;
+import io.nexus.controlplane.service.FakeWorkerService;
+import io.nexus.controlplane.service.TaskFailureService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -56,9 +59,15 @@ class RuntimeHttpIntegrationTest {
         assertThat(queued.path("status").asText()).isEqualTo("QUEUED");
         assertThat(queued.path("tasks").size()).isEqualTo(1);
         assertThat(queued.path("tasks").get(0).path("status").asText()).isEqualTo("PENDING");
+        assertThat(queued.has("output")).isFalse();
+        assertThat(queued.path("tasks").get(0).has("lease_owner")).isFalse();
         var worker = worker(context);
         tick(context, worker);
+        JsonNode running = get("/v1/runs/" + runId);
+        assertThat(running.path("status").asText()).isEqualTo("RUNNING");
+        assertThat(running.path("tasks").get(0).path("lease_owner").asText()).isNotBlank();
         tick(context, worker);
+        assertThat(get("/v1/runs/" + runId).path("tasks").get(0).path("status").asText()).isEqualTo("EXECUTING");
         tick(context, worker);
 
         JsonNode result = get("/v1/runs/" + runId);
@@ -68,8 +77,24 @@ class RuntimeHttpIntegrationTest {
         assertThat(result.path("input").asText()).isEqualTo("分析订单服务错误率");
         assertThat(result.path("status").asText()).isEqualTo("SUCCEEDED");
         assertThat(result.path("output")).isEqualTo(output);
+        assertThat(result.path("tasks").get(0).has("lease_owner")).isFalse();
+        assertThat(result.path("tasks").get(0).has("lease_expires_at")).isFalse();
         assertThat(result.path("tasks").get(0).path("status").asText()).isEqualTo("SUCCEEDED");
         assertThat(result.path("tasks").get(0).path("output")).isEqualTo(output);
+        for (String field : ContractAssertions.requiredRunFields()) {
+            var missing = result.deepCopy();
+            ((com.fasterxml.jackson.databind.node.ObjectNode) missing).remove(field);
+            assertThat(ContractAssertions.responseErrors("/v1/runs/{run_id}", "get", 200, missing))
+                    .as("required success field %s", field).isNotEmpty();
+            var wrongType = result.deepCopy();
+            ((com.fasterxml.jackson.databind.node.ObjectNode) wrongType).putNull(field);
+            assertThat(ContractAssertions.responseErrors("/v1/runs/{run_id}", "get", 200, wrongType))
+                    .as("non-null success field %s", field).isNotEmpty();
+        }
+        var missingOutput = result.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) missingOutput).remove("output");
+        assertThat(ContractAssertions.responseErrors("/v1/runs/{run_id}", "get", 200, missingOutput))
+                .as("successful Run requires output").isNotEmpty();
         JsonNode timeline = get("/v1/runs/" + runId + "/timeline");
         assertThat(timeline.path("run_id").asText()).isEqualTo(runId);
         List<JsonNode> events = mapper.convertValue(timeline.path("events"),
@@ -131,7 +156,9 @@ class RuntimeHttpIntegrationTest {
         for (String request : List.of("{}", "{\"input\":\"test\"}",
                 "{\"session_id\":\"\",\"input\":\"test\"}",
                 "{\"session_id\":\"   \",\"input\":\"test\"}",
-                "{\"session_id\":\"" + sessionId + "\"}", body(sessionId, ""), body(sessionId, "  "),
+                "{\"session_id\":\"" + sessionId + "\"}", body(sessionId, ""), body(sessionId, "  "), body(sessionId, "\t\n"),
+                "{\"session_id\":{},\"input\":\"test\"}",
+                "{\"session_id\":\"" + sessionId + "\",\"input\":[]}",
                 "{\"session_id\":null,\"input\":\"test\"}",
                 "{\"session_id\":\"" + sessionId + "\",\"input\":null}", "{invalid", "")) {
             assertError(create(UUID.randomUUID().toString(), request), 400, "invalid_request");
@@ -141,16 +168,108 @@ class RuntimeHttpIntegrationTest {
     }
 
     @Test
+    void unknownRequestFieldsAreIgnoredAndDoNotAffectIdempotency() throws Exception {
+        String request = body(sessionId, "valid");
+        String runId = accepted(create("unknown-fields", request.substring(0, request.length() - 1)
+                + ",\"future_option\":{\"enabled\":true}}"));
+        assertThat(accepted(create("unknown-fields", request))).isEqualTo(runId);
+        assertOneAggregate(runId, sessionId, "valid");
+        assertThat(accepted(create("k".repeat(255), body(sessionId, "合法客户端请求")))).isNotBlank();
+    }
+
+    @Test
+    void scalarValuesCannotBeCoercedIntoRequestStrings() {
+        for (String scalar : List.of("123", "1.5", "true", "false")) {
+            assertError(create("scalar-input", "{\"session_id\":\"" + sessionId + "\",\"input\":" + scalar + "}"),
+                    400, "invalid_request");
+            assertError(create("scalar-session", "{\"session_id\":" + scalar + ",\"input\":\"valid\"}"),
+                    400, "invalid_request");
+        }
+        assertCounts(0, 0, 0);
+    }
+
+    @Test
     void missingResourcesReturn404WithoutWritingBusinessRecords() throws Exception {
         assertError(create("unknown", body("ses_missing", "test")), 404, "not_found");
-        assertError(http.getForEntity("/v1/runs/run_missing", JsonNode.class), 404, "not_found");
-        assertError(http.getForEntity("/v1/runs/run_missing/timeline", JsonNode.class), 404, "not_found");
+        for (String path : List.of("/v1/runs/{run_id}", "/v1/runs/{run_id}/timeline")) {
+            var response = http.getForEntity(path.replace("{run_id}", "run_missing"), JsonNode.class);
+            ContractAssertions.response(path, "get", response);
+            assertError(response, 404, "not_found");
+        }
         assertCounts(0, 0, 0);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM sessions", Integer.class)).isEqualTo(1);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void executionFailuresHaveContractValidRetryAndFinalFailure(boolean exhaust) throws Exception {
+        verifyFailedAttempts(exhaust, false);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void leaseExpiryHasContractValidRetryAndFinalFailure(boolean exhaust) throws Exception {
+        verifyFailedAttempts(exhaust, true);
+    }
+
+    private void verifyFailedAttempts(boolean exhaust, boolean expired) throws Exception {
+        String runId = accepted(create("failure-contract", body(sessionId, "failure contract")));
+        var failures = context.getBean(TaskFailureService.class);
+        var failingWorker = new FakeWorkerService(store, mapper, failures, task -> {
+            throw new IllegalStateException("controlled failure");
+        }, 30_000);
+        for (int attempt = 1; attempt <= (exhaust ? 3 : 1); attempt++) {
+            tick(context, failingWorker);
+            if (!expired) tick(context, failingWorker);
+            if (expired) {
+                jdbc.update("UPDATE tasks SET lease_expires_at = clock_timestamp() - INTERVAL '1 second' WHERE run_id = ?", runId);
+                failures.recoverExpiredLeases();
+            } else {
+                tick(context, failingWorker);
+            }
+            JsonNode run = get("/v1/runs/" + runId);
+            JsonNode task = run.path("tasks").get(0);
+            assertThat(task.path("attempt").asInt()).isEqualTo(attempt);
+            assertThat(task.path("status").asText()).isEqualTo(attempt == 3 ? "FAILED" : "RETRYING");
+            assertThat(run.path("status").asText()).isEqualTo(attempt == 3 ? "FAILED" : "RUNNING");
+            assertThat(run.has("output")).isFalse();
+            assertThat(task.has("output")).isFalse();
+            assertThat(task.has("lease_owner")).isFalse();
+            assertThat(task.has("lease_expires_at")).isFalse();
+            // HTTP timeline validation includes the external event schema and all retry payloads.
+            get("/v1/runs/" + runId + "/timeline");
+            if (attempt < 3) {
+                jdbc.update("UPDATE tasks SET next_attempt_at = clock_timestamp() - INTERVAL '1 second' WHERE run_id = ?", runId);
+            }
+        }
+        if (!exhaust) {
+            var successful = worker(context);
+            tick(context, successful);
+            tick(context, successful);
+            tick(context, successful);
+            assertThat(get("/v1/runs/" + runId).path("status").asText()).isEqualTo("SUCCEEDED");
+        }
+        JsonNode events = get("/v1/runs/" + runId + "/timeline").path("events");
+        for (JsonNode event : events) {
+            ContractAssertions.event(event);
+            // Mutate real events rather than validating only hand-authored fixtures.
+            var missingPayload = event.deepCopy();
+            ((com.fasterxml.jackson.databind.node.ObjectNode) missingPayload).remove("payload");
+            assertThat(ContractAssertions.eventErrors(missingPayload)).isNotEmpty();
+            for (String field : ContractAssertions.requiredEventPayloadFields(event.path("event_type").asText())) {
+                var missing = event.deepCopy();
+                ((com.fasterxml.jackson.databind.node.ObjectNode) missing.path("payload")).remove(field);
+                assertThat(ContractAssertions.eventErrors(missing)).as("required %s.%s", event.path("event_type"), field).isNotEmpty();
+                var wrongType = event.deepCopy();
+                ((com.fasterxml.jackson.databind.node.ObjectNode) wrongType.path("payload")).putArray(field);
+                assertThat(ContractAssertions.eventErrors(wrongType)).as("type %s.%s", event.path("event_type"), field).isNotEmpty();
+            }
+        }
+    }
+
     private String createSession() {
         var response = http.postForEntity("/v1/sessions", null, JsonNode.class);
+        ContractAssertions.response("/v1/sessions", "post", response);
         assertThat(response.getStatusCode().value()).isEqualTo(201);
         assertThat(response.getBody().path("created_at").asText()).isNotBlank();
         String id = response.getBody().path("session_id").asText();
@@ -166,7 +285,9 @@ class RuntimeHttpIntegrationTest {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         if (key != null) headers.set("Idempotency-Key", key);
-        return http.exchange("/v1/runs", HttpMethod.POST, new HttpEntity<>(request, headers), JsonNode.class);
+        var response = http.exchange("/v1/runs", HttpMethod.POST, new HttpEntity<>(request, headers), JsonNode.class);
+        ContractAssertions.response("/v1/runs", "post", response);
+        return response;
     }
 
     private String accepted(ResponseEntity<JsonNode> response) {
@@ -177,6 +298,7 @@ class RuntimeHttpIntegrationTest {
 
     private JsonNode get(String path) {
         var response = http.getForEntity(path, JsonNode.class);
+        ContractAssertions.response(path.endsWith("/timeline") ? "/v1/runs/{run_id}/timeline" : "/v1/runs/{run_id}", "get", response);
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         return response.getBody();
     }

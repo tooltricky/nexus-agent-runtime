@@ -20,6 +20,7 @@ services:
     working_dir: /workspace
     volumes:
       - ../services/control-plane:/workspace
+      - ../packages/contracts:/packages/contracts:ro
     environment:
       TEST_DB_URL: jdbc:postgresql://postgres:5432/nexus_test
       TEST_DB_USERNAME: nexus

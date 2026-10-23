@@ -10,7 +10,7 @@ Nexus Agent Runtime 的可运行纵向切片：创建 Session 和幂等 Run，�
 - 基于真实 Task Lease 的数据库任务领取和可重启 fake worker
 - 持久化 `RETRYING`、指数退避和 Task/Run 原子失败
 - append-only `domain_events` 时间线
-- OpenAPI 3.1 和 JSON Schema 合约
+- OpenAPI 3.1 / JSON Schema 2020-12 合约及真实 HTTP / 事件自动验证
 - Docker Compose 一键启动
 
 当前唯一任务的固定输出为：
@@ -106,6 +106,7 @@ curl -sS http://localhost:8080/v1/runs/<run_id>/timeline
 ```bash
 docker run --rm \
   -v "$PWD/services/control-plane:/workspace" \
+  -v "$PWD/packages/contracts:/packages/contracts:ro" \
   -w /workspace \
   maven:3.9.11-eclipse-temurin-21 mvn -B test
 ```
@@ -136,9 +137,22 @@ HTTP 回归测试为避免后台调度干扰并发创建断言，禁用定时 wo
 共享清表和有超时的并发同步辅助代码位于 `src/test/java/io/nexus/controlplane/support/RuntimeTestSupport.java`。
 测试类共享同一测试库，不能并行运行这些集成测试类。
 
-运行后检查 `services/control-plane/target/surefire-reports/` 下的报告：B01 验证时共 31 项，
-其中 HTTP 7 项、数据库领取和事件不可变 3 项、应用重启 3 项、原重试集成 10 项、单元测试 8 项，
-失败 / 错误 / 跳过均为 0。没有设置 `TEST_DB_URL` 的单元测试运行不能代替这次独立数据库验证。
+合约测试随 `mvn test` 执行，通过 networknt JSON Schema 校验器（2020-12，显式校验时间格式）
+读取仓库的 OpenAPI 响应定义及外部事件 Schema。无需数据库的反例测试可单独运行：
+
+```bash
+docker run --rm \
+  -v "$PWD/services/control-plane:/workspace" \
+  -v "$PWD/packages/contracts:/packages/contracts:ro" \
+  -w /workspace \
+  maven:3.9.11-eclipse-temurin-21 mvn -B -Dtest=ContractValidationTest test
+```
+
+完整验收仍使用上面的独立 PostgreSQL Compose，检查 `services/control-plane/target/surefire-reports/`
+报告中的实际执行数与跳过数。B02 的实际结果见 [backlog](docs/backlog.md#当前任务)。
+没有设置 `TEST_DB_URL` 的单元测试运行不能代替独立数据库验证。合约字段与演进规则见
+[合约说明](packages/contracts/README.md)。测试读取 `packages/contracts`，因此 Maven 从完整仓库运行；
+Docker 构建上下文也使用仓库根目录。
 
 ## 目录
 
@@ -154,4 +168,5 @@ nexus-agent-runtime/
 ```
 
 架构取舍见 [ADR 0001](docs/adr/0001-mvp-vertical-slice.md)、
-[ADR 0002](docs/adr/0002-task-lease.md) 和 [ADR 0003](docs/adr/0003-task-failure-and-retry.md)。
+[ADR 0002](docs/adr/0002-task-lease.md)、[ADR 0003](docs/adr/0003-task-failure-and-retry.md)
+和 [ADR 0004](docs/adr/0004-contract-validation.md)。
