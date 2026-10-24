@@ -25,7 +25,7 @@ services:
       TEST_DB_URL: jdbc:postgresql://postgres:5432/nexus_test
       TEST_DB_USERNAME: nexus
       TEST_DB_PASSWORD: nexus
-    command: ["mvn", "-B", "--no-transfer-progress", "-Dmaven.repo.local=/workspace/target/maven-repository", "test"]
+    command: ["mvn", "-B", "--no-transfer-progress", "-Dmaven.repo.local=/workspace/target/maven-repository", "verify"]
     depends_on:
       postgres:
         condition: service_healthy

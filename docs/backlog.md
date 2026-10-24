@@ -2,13 +2,13 @@
 
 ## 当前状态
 
-截至 2026-10-23，项目是带租约和有限重试的单任务 Runtime 骨架，B01、B02 已完成；本轮停留在 B02 交付，未开始 B03。详细背景见 [README](../README.md)、[项目设计](project-design.md) 和 [ADR](adr/)。本文件只保留当前任务、未完成路线和精简完成记录；具体实现细节以代码和 Git 提交为准。
+截至 2026-10-24，项目是带租约和有限重试的单任务 Runtime 骨架，B01、B02 已完成；B03 的 CI 工作流及报告检查器已实现并通过本地验收，尚待 GitHub 平台实跑确认，未开始 B04。详细背景见 [README](../README.md)、[项目设计](project-design.md) 和 [ADR](adr/)。本文件只保留当前任务、未完成路线和精简完成记录；具体实现细节以代码和 Git 提交为准。
 
 设计说明书是目标蓝图，ADR 是当前已接受的落地决策。继续优先采用 Spring Boot 模块化单体和 PostgreSQL；不把引入全部语言、中间件或拆分服务作为下一步的前置条件。改变既有语义或引入部署边界时补充 ADR。特别是 ADR 0003 已取代 ADR 0002 中“租约过期立即回到 PENDING”的行为。
 
 ## 任务执行规则
 
-- B01、B02 已完成，其余 B 编号任务仍为“待办”；编号给出推荐开发顺序，“依赖”列列出主要直接依赖。一次只选一个任务，完成后再选下一项。
+- B01、B02 已完成，B03 为当前任务、尚待平台验收，其余 B 编号任务仍为“待办”；编号给出推荐开发顺序，“依赖”列列出主要直接依赖。一次只选一个任务，完成后再选下一项。
 - 每项都要形成独立、可审查的交付。表中“做什么”是范围，“怎样检查完成”是必须满足的验收条件；不是看到类名、接口或配置文件就算完成。
 - 功能有数据库、状态、HTTP 或事件变化时，同步更新迁移、OpenAPI / JSON Schema、必要测试和 README；不回改已经应用的 V1–V3 迁移。新增状态不能只改 Java 枚举。
 - 数据库验证使用 README 的独立测试库：`docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests`，检查测试报告确认数据库集成测试实际执行、未被跳过，再用同一 Compose 文件 `down` 清理。禁止连接演示或业务数据库跑清表测试。
@@ -127,31 +127,31 @@
 
 ## 当前任务
 
-**B02：自动合约验证（已完成）**。已实现合约校准、真实 HTTP / 事件验证与正反例测试。B01 已在提交 `ef1b809410871ffa75adbcf4347c9d4d01df92f2` 中完成；B03（CI）未开始。
+**B03：持续集成（CI）自动检查**。已实现工作流、报告检查器、必要回归测试及使用说明，本地独立 PostgreSQL 验证通过。尚未推送或在 GitHub 实跑，暂不标记全部验收完成；未开始 B04。
 
-下列实施基线在本次开始修改代码前读取；原方案基线为 `ef1b809410871ffa75adbcf4347c9d4d01df92f2`，本次实施基线包含已提交的 B02 方案文档。交付保留在工作区，尚未提交。
+下列实施基线是在开始修改 B03 代码前读取的；后续审查可用分支和提交编号定位本次改动。
 
 | 字段 | 内容 |
 | --- | --- |
-| 任务编号 / 名称 | B02：自动合约验证 |
-| 状态 | 已完成实现及独立 PostgreSQL 验收；未开始后续任务 |
-| 目标与范围 | 让 OpenAPI 和领域事件 JSON Schema 准确描述现有 HTTP 与事件行为，并用自动测试检查真实成功、失败、重试响应及事件。明确请求限制、400 错误、可空或省略字段、重试 payload 和 Schema 演进规则。只做 B02，不搭建 B03 的 CI。 |
-| 实现方案 / 预计修改位置 | ① 对照 `services/control-plane/src/main/java/io/nexus/controlplane/api/` 的请求校验、错误处理和响应序列化，以及 `service/` 中的成功、失败、重试事件写入逻辑，逐项核对 `packages/contracts/openapi.yaml` 与 `packages/contracts/events/domain-event.schema.json`。② 在 OpenAPI 中补齐各接口的实际 400 响应、请求字段和幂等键的空白/长度限制，明确未知请求字段的约定，并使可空或省略字段与实际 JSON 一致；在事件 Schema 中约束已有事件类型及关键 payload，特别是 `TaskRetried`、`TaskFailed`、`RunFailed`，同时写明向后兼容的 Schema 演进规则。先用真实请求确认未知字段等现有行为，再决定修正合约还是在必要时小范围修正请求处理，避免无意破坏已有合法客户端。③ 在 `services/control-plane/pom.xml` 加入适合 OpenAPI 3.1 / JSON Schema 2020-12 的测试依赖；复用 `RuntimeHttpIntegrationTest.java`、`TaskRetryIntegrationTest.java` 和现有独立 PostgreSQL 测试夹具，新增或扩展合约测试：调用真实 HTTP、读取真实时间线，并按合约验证响应和事件；加入缺少必填字段、字段类型错误等反例，证明校验会失败。④ 更新 `README.md` 的合约检查运行方法和本文进度。预计不改已应用的 V1–V3 迁移；如实际 HTTP / 事件行为需调整，同步修改合约和必要测试。 |
-| 验收条件 | ① 自动测试校验真实 Session / Run 成功响应、400 / 404 / 409 错误响应、运行中与终态查询，以及成功、失败、重试时间线中的事件。② 缺少必填字段、类型错误或不合法事件 payload 的样本被合约校验拒绝，证明测试不是只检查文件可解析。③ 空白 `session_id` / `input`、缺失/空白/超过 255 字符的 `Idempotency-Key`、未知请求字段的约定与实际 HTTP 状态和错误体一致；现有合法客户端请求仍能通过。④ `output`、租约字段等在不同状态下为空或省略时符合文档，`TaskRetried` 的 attempt、reason、退避和下次尝试时间等关键字段受到校验；明确新增可选字段与破坏性变更的版本处理规则。⑤ 使用 README 的独立 PostgreSQL Compose 运行全部相关测试，检查 Surefire 报告确认集成测试执行、失败/错误/跳过均为 0，再清理测试环境；不连接演示或业务数据库。 |
-| 实施分支 | `main`（2026-10-23 本次实施前读取；工作区干净） |
-| 开始修改前的提交编号 | `69da7ff2e44076a0c806f88fe0039ace90814b79`（2026-10-23 本次实施前读取；包含原方案文档，后续审查以此为基线） |
-| 实际修改与测试 | OpenAPI 增加真实 400 / 404 / 409 错误码、空白与长度限制、输出/租约省略规则及单 Task 约束；未知请求字段实测为忽略，保持兼容。HTTP 实测发现数字可被 Jackson 转为字符串，新增 `ApiJsonConfiguration` 禁止数字/布尔值转字符串，使错误类型返回 400，并以 ADR 0004 记录该行为收紧。领域事件 Schema 按 12 种事件约束 payload，OpenAPI 直接引用同一文件；新增合约说明与演进规则。引入仅测试使用的 networknt 2020-12 校验器及 YAML 解析，扩展 HTTP / 重试测试，补缺字段、错误类型、非法重试值与可选字段演进反例；同步 Maven 资源、Compose 挂载与镜像构建上下文，未修改 V1–V3。独立 PostgreSQL 最终测试结果见下方完成记录。 |
-| 下一步 | 本任务完成后停止；等待用户指定后续工作，不自动开始 B03。 |
+| 任务编号 / 名称 | B03：持续集成（CI）自动检查 |
+| 状态 | 已实现并通过本地验收；改动尚未提交，GitHub Actions 实跑及附件下载待验收 |
+| 目标与范围 | 每次推送或提交合并请求时，自动完成 Java 构建、单元测试、独立 PostgreSQL 集成测试和合约校验，并保存测试报告。重点防止数据库测试因缺少 `TEST_DB_URL` 被静默跳过；CI 不依赖开发者本机密钥，也不连接演示或业务数据库。 |
+| 实现方案 / 预计修改位置 | ① 新增 `.github/workflows/ci.yml`，在标准 Ubuntu runner 上响应 push / pull_request / 手动触发，使用 Java 21 Maven 容器；复用 `deploy/docker-compose.test.yml` 启动临时 PostgreSQL。② 调整测试命令为 `mvn -B verify`，让 CI 同时确认测试通过且应用可以打包；保留现有 B02 合约测试。③ 新增 `scripts/check-test-reports.py` 及 `scripts/test_check_test_reports.py`，读取 Surefire XML，确认关键单元、集成和合约测试实际执行，失败 / 错误 / 跳过或缺少报告时让 CI 失败。④ 配置 CI 上传 Surefire 报告和构建日志，即使测试失败也尝试收集与上传；工作流结束后执行 Compose 清理。⑤ 更新 `README.md` 的 CI 使用说明，并在本文记录实际运行结果；不修改已应用的 V1–V3 数据库迁移。 |
+| 验收条件 | ① 一次 CI 运行完成构建、单元测试、独立 PostgreSQL 集成测试、合约校验和打包，报告可下载，关键测试的失败 / 错误 / 跳过均为 0。② 故意破坏状态迁移或合约时，CI 会失败。③ 移除 `TEST_DB_URL` 或测试数据库配置时，报告检查会失败，不能因测试被跳过而显示成功。④ 缺少关键 Surefire 报告、测试没有实际执行或 Compose 启动失败时，CI 会失败并保留日志。⑤ 不需要开发者密钥，测试使用项目现有 fake executor 和临时数据库；验证结束后清理容器和网络。 |
+| 实施分支 | `main`（2026-10-24 登记方案前读取，工作区干净；实施开始时仅有本任务方案文档的未提交修改） |
+| 开始修改前的提交编号 | `73cf9d1a3d613a1a04e4085976c3e8ba5a3fecc2`（2026-10-24 读取，作为 B03 后续审查基线） |
+| 实际修改与测试 | 工作流使用只读仓库权限、不保留 checkout 凭证；Maven 与报告检查分别保留退出结果，日志收集、Compose 清理、报告上传均使用 `always()`，附件保留 7 天。报告检查覆盖全部 8 个现有测试类及发现的新增类，拒绝缺失、失败、错误、跳过、零测试、损坏 / 不一致计数与重复报告；不锁死历史测试总数。检查器 12 项 Python 回归测试通过。独立 PostgreSQL Compose 执行 `verify`：41 项通过，失败 / 错误 / 跳过均为 0，数据库集成 29 项实际执行，Spring Boot JAR 成功打包，容器和网络已清理。临时副本故障注入：允许非法状态迁移时 Maven 与检查器均失败（41 项中 1 项失败）；Session 合约类型被破坏时两者均失败（41 项中 14 项失败）；移除 `TEST_DB_URL` 时 Maven 仍成功，但 23 项被跳过，检查器返回失败。三个故障环境均已清理，工作区业务源码与合约未被故障注入改写。Compose 配置、actionlint 1.7.7、工作流 YAML / Shell 语法与 `git diff --check` 通过。GitHub 平台工作流与附件下载尚未实测；没有推送代码或宣称整项验收完成。 |
+| 下一步 | 本地实施结束后停止；在后续获准推送时确认一次真实 GitHub Actions 运行、附件下载与清理步骤，再更新最终验收状态。未开始 B04，不自动选择下一任务。 |
 
 ## 完成记录
 
 B01 已于 2026-10-23 提交为 `ef1b809`；独立 PostgreSQL 测试 31 项通过，失败 / 错误 / 跳过均为 0，覆盖 HTTP、并发幂等、领取、重启接管和事件不可变。应用进程强杀演练未做。
 
-B02 于 2026-10-23 完成，改动尚未提交。独立 PostgreSQL Compose 最终验收：41 项通过，失败 / 错误 / 跳过均为 0。
+B02 于 2026-10-23 完成，已提交为 `73cf9d1`。独立 PostgreSQL Compose 最终验收：41 项通过，失败 / 错误 / 跳过均为 0。
 已逐份读取 `services/control-plane/target/surefire-reports/TEST-*.xml`：HTTP 13 项、领取/事件不可变 3 项、应用重启 3 项、重试集成 10 项、合约反例/演进 4 项、原单元测试 8 项；数据库集成合计 29 项实际执行，未被跳过。
 执行 `docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests` 后，再用同一 Compose 文件 `down` 清理容器和网络，未连接演示/业务数据库。
 校验覆盖真实 Session / Run 成功、400 / 404 / 409、排队/租约/执行/成功/重试/失败查询，以及执行异常和租约过期的重试成功与耗尽失败时间线。
 复用 TaskRetryIntegrationTest 校验并发竞争、事务回滚等场景的真实事件；删除真实 payload 必填字段或替换类型均被拒绝。
 新增可选字段可读，未知事件类型及非法重试原因/时间/数值会失败。Schema 检查限于 OpenAPI 中的 JSON Schema 与响应状态/媒体类型，不宣称完整 OpenAPI 文档 lint 或 CI 已交付。
 审查修复：真实响应和事件的删除/错类型反例只遍历 Schema 的 `required` 字段；新增可选字段可删除且仍通过校验，成功 Run 的条件必填 `output` 单独检查。
-镜像构建验证：`docker compose -f deploy/docker-compose.yml build control-plane` 成功；构建内 Maven 测试 34 项，失败/错误 0，数据库集成测试因未配置 `TEST_DB_URL` 跳过 23 项（独立数据库最终验收已单独全部执行）。未做真实模型/下游联调（本任务使用 fake executor），未修改数据库迁移，B03 未开始。
+镜像构建验证：`docker compose -f deploy/docker-compose.yml build control-plane` 成功；构建内 Maven 测试 34 项，失败/错误 0，数据库集成测试因未配置 `TEST_DB_URL` 跳过 23 项（独立数据库最终验收已单独全部执行）。未做真实模型/下游联调（本任务使用 fake executor），未修改数据库迁移；B02 交付时尚未开始 B03。

@@ -11,6 +11,7 @@ Nexus Agent Runtime 的可运行纵向切片：创建 Session 和幂等 Run，�
 - 持久化 `RETRYING`、指数退避和 Task/Run 原子失败
 - append-only `domain_events` 时间线
 - OpenAPI 3.1 / JSON Schema 2020-12 合约及真实 HTTP / 事件自动验证
+- GitHub Actions CI：独立 PostgreSQL 测试、打包与测试报告防跳过检查
 - Docker Compose 一键启动
 
 当前唯一任务的固定输出为：
@@ -114,7 +115,7 @@ docker run --rm \
 状态机和重试策略测试无需数据库。PostgreSQL 集成测试需要显式提供 `TEST_DB_URL`
 （可选 `TEST_DB_USERNAME` / `TEST_DB_PASSWORD`，均默认为 `nexus`）；未提供时会跳过。
 集成测试会清空该数据库的业务表，必须使用独立测试库。下面的命令会创建临时 PostgreSQL，
-执行全部测试并保留 Maven 缓存到已忽略的 `target/` 目录：
+执行 `mvn verify`（测试并打包），并保留 Maven 缓存到已忽略的 `target/` 目录：
 
 ```bash
 docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests
@@ -149,10 +150,46 @@ docker run --rm \
 ```
 
 完整验收仍使用上面的独立 PostgreSQL Compose，检查 `services/control-plane/target/surefire-reports/`
-报告中的实际执行数与跳过数。B02 的实际结果见 [backlog](docs/backlog.md#当前任务)。
+报告中的实际执行数与跳过数。历史验证结果见 [backlog 完成记录](docs/backlog.md#完成记录)。
 没有设置 `TEST_DB_URL` 的单元测试运行不能代替独立数据库验证。合约字段与演进规则见
 [合约说明](packages/contracts/README.md)。测试读取 `packages/contracts`，因此 Maven 从完整仓库运行；
 Docker 构建上下文也使用仓库根目录。
+
+## 持续集成（CI）
+
+`.github/workflows/ci.yml` 在 GitHub 收到 `push`、`pull_request` 或手动触发时运行。
+工作流使用标准 Ubuntu runner，在 `maven:3.9.11-eclipse-temurin-21` 容器内编译 Java 21、
+执行现有单元 / 数据库集成 / 合约测试并打包。数据库来自同一份测试 Compose，
+使用临时 PostgreSQL，不连接演示或业务数据库；不需要配置开发者密钥或真实模型凭证。
+集成测试仍串行运行，避免共享清表互相干扰。
+
+每次 CI 使用新 runner 的工作区，不复用旧测试报告。Maven 返回成功后仍要检查 Surefire XML：
+所有 8 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
+不一致的计数或损坏内容都会使 CI 失败。新增或重命名测试类时，同步维护
+`scripts/check-test-reports.py` 的 `REQUIRED_SUITES`；发现的其他测试类也接受同样检查。
+所以即使漏配 `TEST_DB_URL` 导致 Maven 跳过集成测试，整次 CI 也不会显示成功。
+报告检查不替代 Maven 的退出码：编译、测试、打包或 Compose 失败都会保留失败结果。
+
+本地运行报告检查器和它的回归测试需要 Python 3.10+，无需安装第三方 Python 包：
+
+```bash
+python3 -B -m unittest discover -s scripts -p 'test_*.py' -v
+python3 scripts/check-test-reports.py
+```
+
+运行第二条命令前，先使用测试 Compose 完成一次全量验证。检查器只检查现有报告，
+不会启动测试，也不判断文件是否属于本次运行；重复本地验收时先清理
+`services/control-plane/target/surefire-reports/` 中的旧报告，不能拿历史报告证明本次通过。
+不要删除整个 `target/` 来清报告，否则会一并删除其中的 Maven 缓存。
+
+在 GitHub 的 **Actions → CI → 对应运行** 查看各步骤结果。无论测试成功或失败，
+后续步骤都会尝试收集容器日志、清理测试容器和网络，并上传 `ci-reports-<运行编号>-<重跑次数>`
+附件（Compose 输出、容器日志和 Surefire XML / 文本报告），保留 7 天。
+报告检查失败的具体原因也会显示在该步骤日志中；若下载镜像或编译前就失败，
+可能没有 Surefire 报告，CI 会保留当时可获取的日志。
+
+本地验证不等同于 GitHub 平台验收；首次推送后还需确认一次真实 Actions 运行完成、
+附件可下载且清理步骤执行。B03 的实际验证与未完成项见 [当前任务](docs/backlog.md#当前任务)。
 
 ## 目录
 
