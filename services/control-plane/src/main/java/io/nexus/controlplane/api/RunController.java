@@ -9,6 +9,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,12 +40,12 @@ public class RunController {
     }
 
     @GetMapping("/{runId}")
-    public RunResponse getRun(@PathVariable String runId) {
-        return runtimeService.getRun(runId);
+    public ResponseEntity<RunResponse> getRun(@PathVariable String runId) {
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.2").body(runtimeService.getRun(runId));
     }
 
     @GetMapping("/{runId}/timeline")
-    public TimelineResponse getTimeline(@PathVariable String runId) {
-        return runtimeService.getTimeline(runId);
+    public ResponseEntity<TimelineResponse> getTimeline(@PathVariable String runId) {
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.2").body(runtimeService.getTimeline(runId));
     }
 }

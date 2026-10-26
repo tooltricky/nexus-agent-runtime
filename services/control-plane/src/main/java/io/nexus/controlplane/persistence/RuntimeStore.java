@@ -266,7 +266,8 @@ public class RuntimeStore {
                 rs.getString("task_id"),
                 rs.getString("event_type"),
                 jsonNode(rs.getString("payload")),
-                instant(rs, "occurred_at")
+                instant(rs, "occurred_at"),
+                rs.getString("schema_version")
         );
     }
 

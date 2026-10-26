@@ -1,6 +1,7 @@
 package io.nexus.controlplane.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.nexus.controlplane.domain.RunStatus;
 import io.nexus.controlplane.domain.TaskStatus;
 import jakarta.validation.constraints.NotBlank;
@@ -58,7 +59,8 @@ public final class ApiModels {
             String taskId,
             String eventType,
             JsonNode payload,
-            Instant occurredAt
+            Instant occurredAt,
+            @JsonInclude(JsonInclude.Include.NON_NULL) String schemaVersion
     ) {
     }
 

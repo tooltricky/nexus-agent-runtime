@@ -52,7 +52,8 @@ public final class Records {
             String taskId,
             String eventType,
             JsonNode payload,
-            Instant occurredAt
+            Instant occurredAt,
+            String schemaVersion
     ) {
     }
 }

@@ -7,14 +7,12 @@ import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SchemaValidatorsConfig;
-import com.networknt.schema.SchemaLocation;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 
 import java.io.IOException;
-import java.net.URI;
 import java.util.List;
 import java.util.Set;
 
@@ -26,13 +24,19 @@ public final class ContractAssertions {
     private static final JsonSchemaFactory FACTORY = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
     private static final SchemaValidatorsConfig CONFIG = SchemaValidatorsConfig.builder()
             .formatAssertionsEnabled(true).build();
-    private static final JsonNode API = readApi();
-    private static final JsonNode EVENT_SCHEMA = readEventSchema();
-    private static final JsonSchema EVENT = FACTORY.getSchema(SchemaLocation.of(eventUri().toString()), CONFIG);
+    private static final JsonNode API = readApi("openapi.yaml");
+    private static final JsonNode LEGACY_API = readApi("openapi-v0.1.yaml");
+    private static final JsonNode EVENT_SCHEMA = resource("events/domain-event.schema.json");
+    private static final JsonNode NEW_EVENT_SCHEMA = resource("events/domain-event-v0.2.schema.json");
+    private static final JsonSchema LEGACY_EVENT = FACTORY.getSchema(EVENT_SCHEMA, CONFIG);
+    private static final JsonSchema EVENT = FACTORY.getSchema(API.at("/components/schemas/DomainEvent"), CONFIG);
 
     private ContractAssertions() { }
 
     public static void response(String path, String method, ResponseEntity<JsonNode> response) {
+        if (method.equals("get") && response.getStatusCode().is2xxSuccessful()) {
+            assertThat(response.getHeaders().getFirst("Nexus-API-Contract")).isEqualTo("0.2");
+        }
         assertThat(response.getHeaders().getContentType()).isNotNull()
                 .satisfies(type -> assertThat(type.isCompatibleWith(MediaType.APPLICATION_JSON)).isTrue());
         JsonNode schema = responseSchema(path, method, response.getStatusCode().value());
@@ -45,6 +49,23 @@ public final class ContractAssertions {
 
     public static Set<ValidationMessage> eventErrors(JsonNode event) {
         return EVENT.validate(event);
+    }
+
+    public static Set<ValidationMessage> legacyEventErrors(JsonNode event) {
+        return LEGACY_EVENT.validate(event);
+    }
+
+    public static Set<ValidationMessage> legacyRunErrors(JsonNode run) {
+        return errors(LEGACY_API.at("/components/schemas/Run"), run, LEGACY_API);
+    }
+
+    public static JsonNode resource(String name) {
+        try (var input = ContractAssertions.class.getResourceAsStream("/contracts/" + name)) {
+            if (input == null) throw new IllegalStateException("Missing contract resource " + name);
+            return JSON.readTree(input);
+        } catch (IOException e) {
+            throw new IllegalStateException("Cannot read contract " + name, e);
+        }
     }
 
     public static Set<ValidationMessage> responseErrors(String path, String method, int status, JsonNode body) {
@@ -65,6 +86,7 @@ public final class ContractAssertions {
 
     public static List<String> requiredEventPayloadFields(String eventType) {
         JsonNode required = EVENT_SCHEMA.path("$defs").path(eventType).path("required");
+        if (required.isMissingNode()) required = NEW_EVENT_SCHEMA.path("$defs").path(eventType).path("required");
         assertThat(required.isArray()).as("documented event type %s", eventType).isTrue();
         return requiredFields(required);
     }
@@ -86,9 +108,13 @@ public final class ContractAssertions {
     }
 
     private static Set<ValidationMessage> errors(JsonNode schema, JsonNode instance) {
+        return errors(schema, instance, API);
+    }
+
+    private static Set<ValidationMessage> errors(JsonNode schema, JsonNode instance, JsonNode api) {
         // OpenAPI 3.1 Schema Objects use JSON Schema 2020-12; keep component refs in scope.
         ObjectNode root = JSON.createObjectNode();
-        root.set("$defs", API.at("/components/schemas"));
+        root.set("$defs", api.at("/components/schemas"));
         root.setAll((ObjectNode) schema);
         try {
             JsonNode jsonSchema = JSON.readTree(JSON.writeValueAsString(root)
@@ -99,35 +125,29 @@ public final class ContractAssertions {
         }
     }
 
-    private static JsonNode readApi() {
+    private static JsonNode readApi(String name) {
         try {
             JsonNode api = new ObjectMapper(new YAMLFactory()).readTree(
-                    ContractAssertions.class.getResourceAsStream("/contracts/openapi.yaml"));
+                    ContractAssertions.class.getResourceAsStream("/contracts/" + name));
             assertThat(api.path("openapi").asText()).isEqualTo("3.1.0");
-            ObjectNode event = (ObjectNode) api.at("/components/schemas/DomainEvent");
-            assertThat(event.path("$ref").asText()).isEqualTo("./events/domain-event.schema.json");
-            // Resolve this relative external ref against the contract resource, without network access.
-            event.put("$ref", eventUri().toString());
+            resolveEventReferences(api.at("/components/schemas/DomainEvent"));
             return api;
         } catch (IOException e) {
             throw new IllegalStateException("Cannot load OpenAPI contract", e);
         }
     }
 
-    private static URI eventUri() {
-        try {
-            return ContractAssertions.class.getResource("/contracts/events/domain-event.schema.json").toURI();
-        } catch (Exception e) {
-            throw new IllegalStateException("Cannot load event contract", e);
+    private static void resolveEventReferences(JsonNode node) {
+        if (node.isObject() && node.has("$ref")) {
+            String ref = node.path("$ref").asText();
+            assertThat(ref).startsWith("./events/");
+            try {
+                ((ObjectNode) node).put("$ref", ContractAssertions.class
+                        .getResource("/contracts/" + ref.substring(2)).toURI().toString());
+            } catch (Exception e) {
+                throw new IllegalStateException("Cannot resolve event contract " + ref, e);
+            }
         }
-    }
-
-    private static JsonNode readEventSchema() {
-        try {
-            return JSON.readTree(ContractAssertions.class.getResourceAsStream(
-                    "/contracts/events/domain-event.schema.json"));
-        } catch (IOException e) {
-            throw new IllegalStateException("Cannot load event contract", e);
-        }
+        node.elements().forEachRemaining(ContractAssertions::resolveEventReferences);
     }
 }

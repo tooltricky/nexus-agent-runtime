@@ -15,6 +15,8 @@ REQUIRED_SUITES = (
     "io.nexus.controlplane.domain.TaskStatusTest",
     "io.nexus.controlplane.service.RetryPolicyTest",
     "io.nexus.controlplane.contracts.ContractValidationTest",
+    "io.nexus.controlplane.contracts.CancellationContractTest",
+    "io.nexus.controlplane.service.CancellationMigrationIntegrationTest",
     "io.nexus.controlplane.api.RuntimeHttpIntegrationTest",
     "io.nexus.controlplane.service.RuntimePersistenceIntegrationTest",
     "io.nexus.controlplane.service.RuntimeRestartIntegrationTest",

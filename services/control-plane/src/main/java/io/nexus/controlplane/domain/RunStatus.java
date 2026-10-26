@@ -9,14 +9,16 @@ public enum RunStatus {
     QUEUED,
     RUNNING,
     SUCCEEDED,
-    FAILED;
+    FAILED,
+    CANCELLED;
 
     private static final Map<RunStatus, Set<RunStatus>> TRANSITIONS = Map.of(
-            CREATED, EnumSet.of(QUEUED),
-            QUEUED, EnumSet.of(RUNNING),
-            RUNNING, EnumSet.of(SUCCEEDED, FAILED),
+            CREATED, EnumSet.of(QUEUED, CANCELLED),
+            QUEUED, EnumSet.of(RUNNING, CANCELLED),
+            RUNNING, EnumSet.of(SUCCEEDED, FAILED, CANCELLED),
             SUCCEEDED, EnumSet.noneOf(RunStatus.class),
-            FAILED, EnumSet.noneOf(RunStatus.class)
+            FAILED, EnumSet.noneOf(RunStatus.class),
+            CANCELLED, EnumSet.noneOf(RunStatus.class)
     );
 
     public void requireTransitionTo(RunStatus next) {

@@ -1,8 +1,11 @@
 openapi: 3.1.0
 info:
   title: Nexus Agent Runtime API
-  version: 0.1.0
-  description: MVP Control Plane API for the Session, Run, Task, and event lifecycle.
+  version: 0.2.0
+  description: >-
+    Contract revision 0.2 for the existing /v1 API. Run and timeline GET responses
+    identify this revision with Nexus-API-Contract: 0.2. Clients must upgrade before
+    cancellation is enabled in B05. This revision does not expose a cancel operation.
 servers:
   - url: http://localhost:8080
 paths:
@@ -58,6 +61,12 @@ paths:
       responses:
         "200":
           description: Current Run state
+          headers:
+            Nexus-API-Contract:
+              description: Explicit representation revision; no legacy negotiation is supported.
+              required: true
+              schema:
+                const: "0.2"
           content:
             application/json:
               schema:
@@ -73,6 +82,12 @@ paths:
       responses:
         "200":
           description: Events ordered by their database sequence
+          headers:
+            Nexus-API-Contract:
+              description: Explicit representation revision; no legacy negotiation is supported.
+              required: true
+              schema:
+                const: "0.2"
           content:
             application/json:
               schema:
@@ -141,10 +156,10 @@ components:
           type: string
     RunStatus:
       type: string
-      enum: [CREATED, QUEUED, RUNNING, SUCCEEDED, FAILED]
+      enum: [CREATED, QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED]
     TaskStatus:
       type: string
-      enum: [PENDING, LEASED, EXECUTING, RETRYING, SUCCEEDED, FAILED]
+      enum: [PENDING, LEASED, EXECUTING, RETRYING, SUCCEEDED, FAILED, CANCELLED]
     Task:
       type: object
       required: [task_id, name, status, input, attempt, max_attempts, next_attempt_at, created_at, updated_at]
@@ -168,6 +183,16 @@ components:
             properties:
               lease_owner: false
               lease_expires_at: false
+        - if:
+            properties:
+              status:
+                const: CANCELLED
+          then:
+            not:
+              anyOf:
+                - required: [output]
+                - required: [lease_owner]
+                - required: [lease_expires_at]
       properties:
         task_id:
           type: string
@@ -221,6 +246,13 @@ components:
           else:
             properties:
               output: false
+        - if:
+            properties:
+              status:
+                const: CANCELLED
+          then:
+            not:
+              required: [output]
       properties:
         run_id:
           type: string
@@ -252,7 +284,13 @@ components:
         summary:
           type: string
     DomainEvent:
-      $ref: "./events/domain-event.schema.json"
+      description: Absent schema_version selects legacy 0.1; explicit 0.2 selects the new schema; all other versions are rejected.
+      if:
+        required: [schema_version]
+      then:
+        $ref: "./events/domain-event-v0.2.schema.json"
+      else:
+        $ref: "./events/domain-event.schema.json"
     Timeline:
       type: object
       required: [run_id, events]

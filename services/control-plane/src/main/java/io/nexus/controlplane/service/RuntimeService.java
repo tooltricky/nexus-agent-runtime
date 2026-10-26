@@ -153,7 +153,8 @@ public class RuntimeService {
                 event.taskId(),
                 event.eventType(),
                 event.payload(),
-                event.occurredAt()
+                event.occurredAt(),
+                event.schemaVersion()
         );
     }
 

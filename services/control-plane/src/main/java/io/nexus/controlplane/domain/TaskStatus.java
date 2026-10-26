@@ -10,15 +10,17 @@ public enum TaskStatus {
     EXECUTING,
     RETRYING,
     SUCCEEDED,
-    FAILED;
+    FAILED,
+    CANCELLED;
 
     private static final Map<TaskStatus, Set<TaskStatus>> TRANSITIONS = Map.of(
-            PENDING, EnumSet.of(LEASED),
-            LEASED, EnumSet.of(EXECUTING, RETRYING, FAILED),
-            EXECUTING, EnumSet.of(RETRYING, SUCCEEDED, FAILED),
-            RETRYING, EnumSet.of(LEASED),
+            PENDING, EnumSet.of(LEASED, CANCELLED),
+            LEASED, EnumSet.of(EXECUTING, RETRYING, FAILED, CANCELLED),
+            EXECUTING, EnumSet.of(RETRYING, SUCCEEDED, FAILED, CANCELLED),
+            RETRYING, EnumSet.of(LEASED, CANCELLED),
             SUCCEEDED, EnumSet.noneOf(TaskStatus.class),
-            FAILED, EnumSet.noneOf(TaskStatus.class)
+            FAILED, EnumSet.noneOf(TaskStatus.class),
+            CANCELLED, EnumSet.noneOf(TaskStatus.class)
     );
 
     public void requireTransitionTo(TaskStatus next) {

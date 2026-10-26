@@ -1,0 +1,188 @@
+[
+  {
+    "sequence": 1,
+    "event_id": "evt_00000000-0000-0000-0000-000000000001",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunCreated",
+    "payload": {
+      "status": "CREATED",
+      "input": "test"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z"
+  },
+  {
+    "sequence": 2,
+    "event_id": "evt_00000000-0000-0000-0000-000000000002",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskCreated",
+    "payload": {
+      "status": "PENDING",
+      "name": "analyze"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+  },
+  {
+    "sequence": 3,
+    "event_id": "evt_00000000-0000-0000-0000-000000000003",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunQueued",
+    "payload": {
+      "from": "CREATED",
+      "to": "QUEUED"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z"
+  },
+  {
+    "sequence": 4,
+    "event_id": "evt_00000000-0000-0000-0000-000000000004",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskLeased",
+    "payload": {
+      "from": "PENDING",
+      "to": "LEASED",
+      "lease_owner": "worker-test",
+      "attempt": 1,
+      "max_attempts": 3,
+      "lease_expires_at": "2026-10-25T00:00:00Z"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+  },
+  {
+    "sequence": 5,
+    "event_id": "evt_00000000-0000-0000-0000-000000000005",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunStarted",
+    "payload": {
+      "from": "QUEUED",
+      "to": "RUNNING"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z"
+  },
+  {
+    "sequence": 6,
+    "event_id": "evt_00000000-0000-0000-0000-000000000006",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskExecuting",
+    "payload": {
+      "from": "LEASED",
+      "to": "EXECUTING"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+  },
+  {
+    "sequence": 7,
+    "event_id": "evt_00000000-0000-0000-0000-000000000007",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskSucceeded",
+    "payload": {
+      "from": "EXECUTING",
+      "to": "SUCCEEDED",
+      "output": {
+        "summary": "test"
+      }
+    },
+    "occurred_at": "2026-10-25T00:00:00Z",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+  },
+  {
+    "sequence": 8,
+    "event_id": "evt_00000000-0000-0000-0000-000000000008",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunSucceeded",
+    "payload": {
+      "from": "RUNNING",
+      "to": "SUCCEEDED",
+      "output": {
+        "summary": "test"
+      }
+    },
+    "occurred_at": "2026-10-25T00:00:00Z"
+  },
+  {
+    "sequence": 9,
+    "event_id": "evt_00000000-0000-0000-0000-000000000009",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskLeaseExpired",
+    "payload": {
+      "attempt": 1,
+      "max_attempts": 3,
+      "reason": "LEASE_EXPIRED",
+      "previous_lease_owner": "worker-test",
+      "lease_expires_at": "2026-10-25T00:00:00Z"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+  },
+  {
+    "sequence": 10,
+    "event_id": "evt_00000000-0000-0000-0000-000000000010",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskRetried",
+    "payload": {
+      "from": "EXECUTING",
+      "to": "RETRYING",
+      "attempt": 1,
+      "max_attempts": 3,
+      "reason": "EXECUTION_FAILED",
+      "retry_delay_ms": 1000,
+      "next_attempt_at": "2026-10-25T00:00:00Z"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+  },
+  {
+    "sequence": 11,
+    "event_id": "evt_00000000-0000-0000-0000-000000000011",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskFailed",
+    "payload": {
+      "from": "EXECUTING",
+      "to": "FAILED",
+      "attempt": 3,
+      "max_attempts": 3,
+      "reason": "EXECUTION_FAILED"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+  },
+  {
+    "sequence": 12,
+    "event_id": "evt_00000000-0000-0000-0000-000000000012",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunFailed",
+    "payload": {
+      "from": "RUNNING",
+      "to": "FAILED",
+      "task_id": "tsk_00000000-0000-0000-0000-000000000001",
+      "reason": "EXECUTION_FAILED"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z"
+  }
+]

@@ -33,4 +33,22 @@ class TaskStatusTest {
         assertThrows(IllegalStateException.class,
                 () -> TaskStatus.FAILED.requireTransitionTo(TaskStatus.LEASED));
     }
+
+    @Test
+    void cancellationIsAllowedFromEveryUnfinishedState() {
+        for (TaskStatus status : java.util.List.of(TaskStatus.PENDING, TaskStatus.LEASED, TaskStatus.EXECUTING, TaskStatus.RETRYING)) {
+            assertDoesNotThrow(() -> status.requireTransitionTo(TaskStatus.CANCELLED), status.name());
+        }
+    }
+
+    @Test
+    void everyTerminalStateRejectsAllFurtherTransitionsIncludingItself() {
+        for (TaskStatus terminal : java.util.List.of(
+                TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED)) {
+            for (TaskStatus next : TaskStatus.values()) {
+                assertThrows(IllegalStateException.class, () -> terminal.requireTransitionTo(next),
+                        terminal + " -> " + next);
+            }
+        }
+    }
 }

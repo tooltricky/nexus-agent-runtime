@@ -1,7 +1,7 @@
 # HTTP 与领域事件合约
 
-`openapi.yaml` 使用 OpenAPI 3.1（Schema Object 为 JSON Schema 2020-12），时间线直接引用
-`events/domain-event.schema.json`，不维护第二份事件定义。当前合约版本为 `0.1.0`。
+`openapi.yaml` 使用 OpenAPI 3.1（Schema Object 为 JSON Schema 2020-12）。当前 HTTP 合约版本为
+`0.2.0`；`openapi-v0.1.yaml` 和 `events/domain-event.schema.json` 保留旧版定义。
 
 创建 Run 的 `session_id` / `input` 必须是非空白字符串；空白按当前 Bean Validation 的
 `String.trim()` 语义判断（U+0000–U+0020），内容不做 trim。`Idempotency-Key` 必须提供，
@@ -29,8 +29,8 @@ aggregate_id 的关联、退避计算与数据库状态一致）仍由领域/集
 - 删除/重命名字段、收紧类型或范围、改变 null/省略约定、增加状态或 event_type 枚举均按
   破坏性变更处理：保留旧版本文件/样本，发布新的 Schema `$id` 和明确的 API/事件版本边界，
   定义双读及迁移规则后再切换。`info.version` 只是文档版本，不能充当事件运行时版本。
-- 当前事件没有 schema_version，不能无声更改当前 `$id` 的语义或改写历史事件。未来事件版本
-  分发/未知版本处理需要明确协议；目前未知 event_type 校验失败，消费者应保留并报告，不猜测处理。
+- 历史事件没有 schema_version，不能回填版本或改写历史事件。B04 新增可空数据库列及查询支持；
+  现有事件写入继续省略版本，B05 的取消事件必须显式使用字符串 `0.2`。未知类型或版本应保留并报告，不猜测处理。
 - 每次演进同时更新实现、合约、正反例与必要的历史版本样本。兼容字段应能被当前校验器读取；
   破坏性变更不得以放宽旧版本枚举掩盖。
 
@@ -39,3 +39,11 @@ aggregate_id 的关联、退避计算与数据库状态一致）仍由领域/集
 成功/失败/租约过期事件，以及对真实事件删除必填字段或替换错误类型的反例。
 校验显式启用 date-time format assertion，所有 `$ref` 从本地合约资源解析，不依赖在线 Schema 服务。
 运行方式及数据库安全要求见根目录 [README](../../README.md#测试)。
+
+## B04：取消与版本边界
+
+B04 准备取消规则、迁移、读取支持和数据合约，尚无取消 HTTP 入口。具体规则见
+[ADR 0005](../../docs/adr/0005-cancellation-foundation.md)。Run 的 CREATED / QUEUED / RUNNING、
+Task 的 PENDING / LEASED / EXECUTING / RETRYING 可以进入 CANCELLED；终态不可再转换。
+取消事件使用 schema_version `0.2`，旧事件仍使用无版本的冻结 Schema。成功 GET Run / timeline
+带 `Nexus-API-Contract: 0.2`，不提供旧版响应协商。样本位于 `examples/`，原子取消和并发验证属于 B05。

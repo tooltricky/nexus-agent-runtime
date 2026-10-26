@@ -53,6 +53,41 @@ class RuntimeHttpIntegrationTest {
     }
 
     @Test
+    void cancellationFixturesAreReadableButNoCancellationEndpointIsRegistered() throws Exception {
+        // This fixture verifies B04 read support, not B05 cancellation behavior.
+        String runId = accepted(create("cancelled-fixture", body(sessionId, "test")));
+        String taskId = store.findTasks(runId).getFirst().id();
+        jdbc.update("UPDATE runs SET status = 'CANCELLED' WHERE id = ?", runId);
+        jdbc.update("UPDATE tasks SET status = 'CANCELLED' WHERE id = ?", taskId);
+        for (JsonNode sample : ContractAssertions.resource("examples/events-cancelled-v0.2.json")) {
+            String kind = sample.path("aggregate_type").asText();
+            var payload = sample.path("payload").deepCopy();
+            if (kind.equals("RUN")) ((com.fasterxml.jackson.databind.node.ObjectNode) payload).put("task_id", taskId);
+            jdbc.update("""
+                    INSERT INTO domain_events
+                        (event_id, aggregate_type, aggregate_id, run_id, task_id, event_type, payload, schema_version)
+                    VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb), '0.2')
+                    """, "evt_" + UUID.randomUUID(), kind, kind.equals("TASK") ? taskId : runId,
+                    runId, kind.equals("TASK") ? taskId : null, sample.path("event_type").asText(), payload.toString());
+        }
+        JsonNode result = get("/v1/runs/" + runId);
+        assertThat(result.path("status").asText()).isEqualTo("CANCELLED");
+        assertThat(result.path("tasks").get(0).path("status").asText()).isEqualTo("CANCELLED");
+        JsonNode events = get("/v1/runs/" + runId + "/timeline").path("events");
+        assertThat(events.size()).isEqualTo(5);
+        for (JsonNode event : events) {
+            ContractAssertions.event(event);
+            assertThat(event.has("schema_version")).isEqualTo(event.path("event_type").asText().endsWith("Cancelled"));
+        }
+        var mappings = context.getBean("requestMappingHandlerMapping",
+                org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping.class);
+        assertThat(mappings.getHandlerMethods().keySet()).noneMatch(mapping ->
+                mapping.getPatternValues().stream().anyMatch(pattern -> pattern.contains("/cancel")));
+        assertThat(http.postForEntity("/v1/runs/" + runId + "/cancel", null, JsonNode.class)
+                .getStatusCode().value()).isEqualTo(404);
+    }
+
+    @Test
     void httpLifecycleReturnsFixedOutputAndOrderedTimeline() throws Exception {
         String runId = accepted(create("success", body(sessionId, "分析订单服务错误率")));
         JsonNode queued = get("/v1/runs/" + runId);

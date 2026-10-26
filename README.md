@@ -6,7 +6,7 @@ Nexus Agent Runtime 的可运行纵向切片：创建 Session 和幂等 Run，�
 
 - Spring Boot 3 + Java 21 模块化单体
 - PostgreSQL 持久化和 Flyway 迁移
-- Run 与 Task 显式状态机
+- Run 与 Task 显式状态机及 CANCELLED 终态基础（尚无取消接口）
 - 基于真实 Task Lease 的数据库任务领取和可重启 fake worker
 - 持久化 `RETRYING`、指数退避和 Task/Run 原子失败
 - append-only `domain_events` 时间线
@@ -100,6 +100,18 @@ curl -sS http://localhost:8080/v1/runs/<run_id>
 curl -sS http://localhost:8080/v1/runs/<run_id>/timeline
 ```
 
+## 取消基础（B04）
+
+B04 已准备取消规则、CANCELLED 状态、V4 数据库迁移和版本化合约，尚未提供取消接口；
+`POST /v1/runs/{run_id}/cancel` 留待 B05。排队、已领取、执行中和等待重试的 Task 可被取消；
+成功、失败、取消都是不可逆终态。重复取消、原子终止、竞争处理和租约清理的运行实现属于 B05。
+取消不等于撤销外部操作或立即中断外部调用，规则见 [ADR 0005](docs/adr/0005-cancellation-foundation.md)。
+
+V4 会自动执行，V1-V3 未改动；历史事件不回填 schema_version。Run / timeline 成功查询带
+`Nexus-API-Contract: 0.2`。旧 HTTP 定义保存在 `packages/contracts/openapi-v0.1.yaml`，新取消事件
+必须带 `schema_version: "0.2"`。客户端须先升级，B05 才能开放取消。HTTP 测试中的取消记录是夹具，
+不代表取消操作已实现。
+
 ## 测试
 
 镜像构建默认执行测试。也可以单独在 Maven 容器中运行：
@@ -164,7 +176,7 @@ Docker 构建上下文也使用仓库根目录。
 集成测试仍串行运行，避免共享清表互相干扰。
 
 每次 CI 使用新 runner 的工作区，不复用旧测试报告。Maven 返回成功后仍要检查 Surefire XML：
-所有 8 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
+所有 10 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
 不一致的计数或损坏内容都会使 CI 失败。新增或重命名测试类时，同步维护
 `scripts/check-test-reports.py` 的 `REQUIRED_SUITES`；发现的其他测试类也接受同样检查。
 所以即使漏配 `TEST_DB_URL` 导致 Maven 跳过集成测试，整次 CI 也不会显示成功。
@@ -206,4 +218,5 @@ nexus-agent-runtime/
 
 架构取舍见 [ADR 0001](docs/adr/0001-mvp-vertical-slice.md)、
 [ADR 0002](docs/adr/0002-task-lease.md)、[ADR 0003](docs/adr/0003-task-failure-and-retry.md)
-和 [ADR 0004](docs/adr/0004-contract-validation.md)。
+、[ADR 0004](docs/adr/0004-contract-validation.md)
+和 [ADR 0005](docs/adr/0005-cancellation-foundation.md)。

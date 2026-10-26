@@ -1,0 +1,36 @@
+[
+  {
+    "sequence": 13,
+    "event_id": "evt_00000000-0000-0000-0000-000000000013",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskCancelled",
+    "payload": {
+      "from": "PENDING",
+      "to": "CANCELLED",
+      "reason": "USER_REQUESTED",
+      "attempt": 0,
+      "max_attempts": 3
+    },
+    "occurred_at": "2026-10-25T00:00:00Z",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "schema_version": "0.2"
+  },
+  {
+    "sequence": 14,
+    "event_id": "evt_00000000-0000-0000-0000-000000000014",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunCancelled",
+    "payload": {
+      "from": "QUEUED",
+      "to": "CANCELLED",
+      "reason": "USER_REQUESTED",
+      "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+    },
+    "occurred_at": "2026-10-25T00:00:00Z",
+    "schema_version": "0.2"
+  }
+]

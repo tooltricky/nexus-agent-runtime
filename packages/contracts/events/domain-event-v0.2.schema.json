@@ -1,0 +1,753 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexus.local/schemas/v0.2/domain-event.schema.json",
+  "title": "Nexus Domain Event",
+  "type": "object",
+  "required": [
+    "sequence",
+    "event_id",
+    "aggregate_type",
+    "aggregate_id",
+    "run_id",
+    "event_type",
+    "payload",
+    "occurred_at",
+    "schema_version"
+  ],
+  "properties": {
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^evt_[0-9a-f-]{36}$"
+    },
+    "aggregate_type": {
+      "type": "string",
+      "enum": [
+        "RUN",
+        "TASK"
+      ]
+    },
+    "aggregate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f-]{36}$"
+    },
+    "task_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^tsk_[0-9a-f-]{36}$",
+      "description": "Required and non-null for TASK events; omitted for RUN events (legacy null is readable)."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "RunCreated",
+        "RunQueued",
+        "RunStarted",
+        "RunSucceeded",
+        "RunFailed",
+        "TaskCreated",
+        "TaskLeased",
+        "TaskLeaseExpired",
+        "TaskRetried",
+        "TaskExecuting",
+        "TaskSucceeded",
+        "TaskFailed",
+        "TaskCancelled",
+        "RunCancelled"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "schema_version": {
+      "const": "0.2"
+    }
+  },
+  "description": "Version 0.2: explicit schema_version and cancellation. Legacy unversioned events retain the frozen 0.1 schema.",
+  "$defs": {
+    "taskId": {
+      "type": "string",
+      "pattern": "^tsk_[0-9a-f-]{36}$"
+    },
+    "RunCreated": {
+      "type": "object",
+      "required": [
+        "status",
+        "input"
+      ],
+      "properties": {
+        "status": {
+          "const": "CREATED"
+        },
+        "input": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "TaskCreated": {
+      "type": "object",
+      "required": [
+        "status",
+        "name"
+      ],
+      "properties": {
+        "status": {
+          "const": "PENDING"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "RunQueued": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "const": "CREATED"
+        },
+        "to": {
+          "const": "QUEUED"
+        }
+      }
+    },
+    "RunStarted": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "const": "QUEUED"
+        },
+        "to": {
+          "const": "RUNNING"
+        }
+      }
+    },
+    "RunSucceeded": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "output"
+      ],
+      "properties": {
+        "from": {
+          "const": "RUNNING"
+        },
+        "to": {
+          "const": "SUCCEEDED"
+        },
+        "output": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "RunFailed": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "task_id",
+        "reason"
+      ],
+      "properties": {
+        "from": {
+          "const": "RUNNING"
+        },
+        "to": {
+          "const": "FAILED"
+        },
+        "task_id": {
+          "$ref": "#/$defs/taskId"
+        },
+        "reason": {
+          "enum": [
+            "EXECUTION_FAILED",
+            "LEASE_EXPIRED"
+          ]
+        }
+      }
+    },
+    "TaskLeased": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "lease_owner",
+        "attempt",
+        "max_attempts",
+        "lease_expires_at"
+      ],
+      "properties": {
+        "from": {
+          "enum": [
+            "PENDING",
+            "RETRYING"
+          ]
+        },
+        "to": {
+          "const": "LEASED"
+        },
+        "lease_owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lease_expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "TaskExecuting": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "properties": {
+        "from": {
+          "const": "LEASED"
+        },
+        "to": {
+          "const": "EXECUTING"
+        }
+      }
+    },
+    "TaskSucceeded": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "output"
+      ],
+      "properties": {
+        "from": {
+          "const": "EXECUTING"
+        },
+        "to": {
+          "const": "SUCCEEDED"
+        },
+        "output": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "TaskLeaseExpired": {
+      "type": "object",
+      "required": [
+        "attempt",
+        "max_attempts",
+        "reason",
+        "previous_lease_owner",
+        "lease_expires_at"
+      ],
+      "properties": {
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "const": "LEASE_EXPIRED"
+        },
+        "previous_lease_owner": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lease_expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "TaskRetried": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "attempt",
+        "max_attempts",
+        "reason",
+        "retry_delay_ms",
+        "next_attempt_at"
+      ],
+      "properties": {
+        "from": {
+          "enum": [
+            "LEASED",
+            "EXECUTING"
+          ]
+        },
+        "to": {
+          "const": "RETRYING"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "enum": [
+            "EXECUTION_FAILED",
+            "LEASE_EXPIRED"
+          ]
+        },
+        "retry_delay_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "next_attempt_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "TaskFailed": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "attempt",
+        "max_attempts",
+        "reason"
+      ],
+      "properties": {
+        "from": {
+          "enum": [
+            "LEASED",
+            "EXECUTING"
+          ]
+        },
+        "to": {
+          "const": "FAILED"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "enum": [
+            "EXECUTION_FAILED",
+            "LEASE_EXPIRED"
+          ]
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "TaskCancelled": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "reason",
+        "attempt",
+        "max_attempts"
+      ],
+      "properties": {
+        "from": {
+          "enum": [
+            "PENDING",
+            "LEASED",
+            "EXECUTING",
+            "RETRYING"
+          ]
+        },
+        "to": {
+          "const": "CANCELLED"
+        },
+        "reason": {
+          "const": "USER_REQUESTED"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "RunCancelled": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "reason",
+        "task_id"
+      ],
+      "properties": {
+        "from": {
+          "enum": [
+            "CREATED",
+            "QUEUED",
+            "RUNNING"
+          ]
+        },
+        "to": {
+          "const": "CANCELLED"
+        },
+        "reason": {
+          "const": "USER_REQUESTED"
+        },
+        "task_id": {
+          "$ref": "#/$defs/taskId"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "$ref": "#/$defs/taskId"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "task_id": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "RunCreated"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "RUN"
+          },
+          "payload": {
+            "$ref": "#/$defs/RunCreated"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "RunQueued"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "RUN"
+          },
+          "payload": {
+            "$ref": "#/$defs/RunQueued"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "RunStarted"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "RUN"
+          },
+          "payload": {
+            "$ref": "#/$defs/RunStarted"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "RunSucceeded"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "RUN"
+          },
+          "payload": {
+            "$ref": "#/$defs/RunSucceeded"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "RunFailed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "RUN"
+          },
+          "payload": {
+            "$ref": "#/$defs/RunFailed"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskCreated"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskCreated"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskLeased"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskLeased"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskLeaseExpired"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskLeaseExpired"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskRetried"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskRetried"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskExecuting"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskExecuting"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskSucceeded"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskSucceeded"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskFailed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskFailed"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskCancelled"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskCancelled"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "RunCancelled"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "RUN"
+          },
+          "payload": {
+            "$ref": "#/$defs/RunCancelled"
+          }
+        }
+      }
+    }
+  ]
+}
