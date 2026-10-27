@@ -3,9 +3,9 @@ info:
   title: Nexus Agent Runtime API
   version: 0.2.0
   description: >-
-    Contract revision 0.2 for the existing /v1 API. Run and timeline GET responses
-    identify this revision with Nexus-API-Contract: 0.2. Clients must upgrade before
-    cancellation is enabled in B05. This revision does not expose a cancel operation.
+    Contract revision 0.2 for the /v1 API. Successful Run/timeline GET and cancel POST
+    responses identify this revision with Nexus-API-Contract: 0.2. Clients must
+    understand CANCELLED and mixed event versions before cancellation is enabled.
 servers:
   - url: http://localhost:8080
 paths:
@@ -73,6 +73,50 @@ paths:
                 $ref: "#/components/schemas/Run"
         "404":
           $ref: "#/components/responses/NotFound"
+  /v1/runs/{run_id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    post:
+      operationId: cancelRun
+      summary: Atomically cancel a Run and its unfinished Task
+      description: >-
+        No request body or Idempotency-Key is required; the body is ignored. Cancels
+        QUEUED/RUNNING Runs, including leased, executing, and retrying Tasks.
+        Repeating cancellation succeeds without changing state or appending events.
+        Completed Runs reject cancellation. Concurrent terminal operations serialize;
+        the first valid terminal transaction to commit wins. Cancellation may wait
+        for an executing transaction and does not undo external side effects or
+        promise immediate interruption.
+      responses:
+        "200":
+          description: Cancelled Run, including an already cancelled Run
+          headers:
+            Nexus-API-Contract:
+              description: Explicit representation revision; no legacy negotiation is supported.
+              required: true
+              schema:
+                const: "0.2"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Run"
+                  - properties:
+                      status:
+                        const: CANCELLED
+                      tasks:
+                        items:
+                          properties:
+                            status:
+                              const: CANCELLED
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Run has already succeeded or failed; no state or event changes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancellationConflictError"
   /v1/runs/{run_id}/timeline:
     parameters:
       - $ref: "#/components/parameters/RunId"
@@ -307,7 +351,7 @@ components:
       properties:
         code:
           type: string
-          enum: [invalid_request, not_found, idempotency_conflict]
+          enum: [invalid_request, not_found, idempotency_conflict, cancellation_conflict]
         message:
           type: string
     InvalidRequestError:
@@ -328,3 +372,9 @@ components:
         - properties:
             code:
               const: idempotency_conflict
+    CancellationConflictError:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - properties:
+            code:
+              const: cancellation_conflict

@@ -67,7 +67,8 @@ public class TaskFailureService {
                     .put("next_attempt_at", updated.nextAttemptAt().toString()));
         } else {
             appendTaskEvent(task, "TaskFailed", payload);
-            RunRecord run = store.findRun(task.runId())
+            // finishFailedAttempt already holds the Task lock, matching cancellation's lock order.
+            RunRecord run = store.findRunForUpdate(task.runId())
                     .orElseThrow(() -> new IllegalStateException("Run not found: " + task.runId()));
             store.transitionRun(run, RunStatus.FAILED, null);
             store.appendEvent(Ids.eventId(), "RUN", run.id(), run.id(), null, "RunFailed",

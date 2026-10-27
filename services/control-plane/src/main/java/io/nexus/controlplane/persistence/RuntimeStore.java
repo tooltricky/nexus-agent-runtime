@@ -55,6 +55,11 @@ public class RuntimeStore {
         return queryOne("SELECT * FROM runs WHERE id = ?", this::mapRun, id);
     }
 
+    /** Call only after locking this Run's Task, matching worker/failure lock order. */
+    public Optional<RunRecord> findRunForUpdate(String id) {
+        return queryOne("SELECT * FROM runs WHERE id = ? FOR UPDATE", this::mapRun, id);
+    }
+
     public Optional<RunRecord> findRunByIdempotencyKey(String idempotencyKey) {
         return queryOne("SELECT * FROM runs WHERE idempotency_key = ?", this::mapRun, idempotencyKey);
     }
@@ -68,6 +73,22 @@ public class RuntimeStore {
 
     public List<TaskRecord> findTasks(String runId) {
         return jdbc.query("SELECT * FROM tasks WHERE run_id = ? ORDER BY created_at, id", this::mapTask, runId);
+    }
+
+    public List<TaskRecord> findTasksForUpdate(String runId) {
+        return jdbc.query("SELECT * FROM tasks WHERE run_id = ? ORDER BY id FOR UPDATE", this::mapTask, runId);
+    }
+
+    public void cancelTask(TaskRecord task) {
+        task.status().requireTransitionTo(TaskStatus.CANCELLED);
+        int updated = jdbc.update("""
+                UPDATE tasks
+                SET status = 'CANCELLED', output = NULL,
+                    lease_owner = NULL, lease_expires_at = NULL,
+                    version = version + 1, updated_at = clock_timestamp()
+                WHERE id = ? AND status = ? AND version = ? AND attempt = ?
+                """, task.id(), task.status().name(), task.version(), task.attempt());
+        requireSingleUpdate(updated, "Task", task.id());
     }
 
     public record TaskClaim(TaskRecord task, TaskStatus previousStatus) {
@@ -154,10 +175,11 @@ public class RuntimeStore {
                 WHERE id = ?
                   AND status = ?
                   AND version = ?
+                  AND attempt = ?
                   AND lease_owner = ?
                   AND lease_expires_at > clock_timestamp()
                 """, next.name(), jsonOrNull(output), next.name(), next.name(), task.id(),
-                task.status().name(), task.version(), leaseOwner);
+                task.status().name(), task.version(), task.attempt(), leaseOwner);
         return updated == 1;
     }
 
@@ -187,11 +209,11 @@ public class RuntimeStore {
                     lease_owner = NULL, lease_expires_at = NULL,
                     next_attempt_at = clock_timestamp() + (? * INTERVAL '1 millisecond'),
                     version = version + 1, updated_at = clock_timestamp()
-                WHERE id = ? AND status = ? AND version = ? AND lease_owner = ?
+                WHERE id = ? AND status = ? AND version = ? AND attempt = ? AND lease_owner = ?
                   AND %s
                 RETURNING *
                 """.formatted(leasePredicate), this::mapTask, next.name(), retryDelay.toMillis(),
-                task.id(), task.status().name(), task.version(), leaseOwner).stream().findFirst();
+                task.id(), task.status().name(), task.version(), task.attempt(), leaseOwner).stream().findFirst();
     }
 
     public void appendEvent(
@@ -203,11 +225,24 @@ public class RuntimeStore {
             String eventType,
             JsonNode payload
     ) {
+        appendVersionedEvent(eventId, aggregateType, aggregateId, runId, taskId, eventType, payload, null);
+    }
+
+    public void appendVersionedEvent(
+            String eventId,
+            String aggregateType,
+            String aggregateId,
+            String runId,
+            String taskId,
+            String eventType,
+            JsonNode payload,
+            String schemaVersion
+    ) {
         jdbc.update("""
                 INSERT INTO domain_events
-                    (event_id, aggregate_type, aggregate_id, run_id, task_id, event_type, payload)
-                VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb))
-                """, eventId, aggregateType, aggregateId, runId, taskId, eventType, json(payload));
+                    (event_id, aggregate_type, aggregate_id, run_id, task_id, event_type, payload, schema_version)
+                VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?)
+                """, eventId, aggregateType, aggregateId, runId, taskId, eventType, json(payload), schemaVersion);
     }
 
     public List<EventRecord> findTimeline(String runId) {

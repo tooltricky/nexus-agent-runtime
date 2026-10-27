@@ -149,7 +149,8 @@ public class FakeWorkerService {
     }
 
     private RunRecord requiredRun(String runId) {
-        return store.findRun(runId).orElseThrow(() -> new IllegalStateException("Run not found: " + runId));
+        // Task is already locked by claim/selection; cancellation uses the same Task -> Run order.
+        return store.findRunForUpdate(runId).orElseThrow(() -> new IllegalStateException("Run not found: " + runId));
     }
 
     private ObjectNode transitionPayload(String from, String to) {

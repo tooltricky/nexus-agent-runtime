@@ -58,6 +58,33 @@ V4 only extends the status checks, adds cancellation field checks, and adds the
 nullable event version column. It does not rewrite V1-V3 or disable append-only
 events. Tests cover every source and terminal transition, old and new contract
 samples, unknown versions, V3-to-V4 data preservation, fresh migration,
-cancellation constraints, mixed-version reads, and the absence of a cancel
-route. Concurrent cancellation and late-result behavior are B05 acceptance
-tests.
+cancellation constraints, and mixed-version reads. B04 verified the absence of
+a cancel route; B05 replaces that assertion with live cancellation HTTP tests.
+
+## B05 implementation (2026-10-27)
+
+`POST /v1/runs/{run_id}/cancel` requires no body or Idempotency-Key; a supplied
+body is ignored. Success and repeat cancellation return 200 with the current
+cancelled Run and `Nexus-API-Contract: 0.2`. Completed Runs return
+409 with code `cancellation_conflict`, distinct from creation's
+`idempotency_conflict`; missing Runs return 404 with code `not_found`.
+
+Cancellation locks the Task before the Run, matching worker completion and
+failure handling. It reads the locked current state, clears the lease, increments
+each state version, and writes both versioned events in the same transaction.
+Repeated cancellation returns without another update. Task writes also fence on
+attempt, version, status, and, for worker results, owner and lease validity.
+The database still enforces one Task per Run; no new migration is needed.
+
+Independent-connection tests hold the first operation's locks until the second
+operation is observed waiting or finishing via SKIP LOCKED. Both orders of
+cancellation versus claim, success, final failure, retry, and watchdog recovery
+are covered. Database triggers reject either cancellation event to verify full
+rollback, including leases and the first event. A rolled-back cancellation does
+not defeat a subsequently committed terminal operation.
+
+Executor calls still run inside the worker transaction: cancellation may wait
+for its Task lock and return 409 if completion commits first. B06 will address
+long transactions. There is no heartbeat renewal endpoint yet; B07 will enforce
+cancellation checks there as well. Neither immediate interruption nor reversal
+of external side effects is promised.

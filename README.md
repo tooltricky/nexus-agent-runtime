@@ -6,7 +6,7 @@ Nexus Agent Runtime 的可运行纵向切片：创建 Session 和幂等 Run，�
 
 - Spring Boot 3 + Java 21 模块化单体
 - PostgreSQL 持久化和 Flyway 迁移
-- Run 与 Task 显式状态机及 CANCELLED 终态基础（尚无取消接口）
+- Run 与 Task 显式状态机及原子取消接口、重复取消与迟到结果防护
 - 基于真实 Task Lease 的数据库任务领取和可重启 fake worker
 - 持久化 `RETRYING`、指数退避和 Task/Run 原子失败
 - append-only `domain_events` 时间线
@@ -100,17 +100,32 @@ curl -sS http://localhost:8080/v1/runs/<run_id>
 curl -sS http://localhost:8080/v1/runs/<run_id>/timeline
 ```
 
-## 取消基础（B04）
+## 取消 Run（B05）
 
-B04 已准备取消规则、CANCELLED 状态、V4 数据库迁移和版本化合约，尚未提供取消接口；
-`POST /v1/runs/{run_id}/cancel` 留待 B05。排队、已领取、执行中和等待重试的 Task 可被取消；
-成功、失败、取消都是不可逆终态。重复取消、原子终止、竞争处理和租约清理的运行实现属于 B05。
-取消不等于撤销外部操作或立即中断外部调用，规则见 [ADR 0005](docs/adr/0005-cancellation-foundation.md)。
+```bash
+curl -i -X POST http://localhost:8080/v1/runs/<run_id>/cancel
+```
 
-V4 会自动执行，V1-V3 未改动；历史事件不回填 schema_version。Run / timeline 成功查询带
-`Nexus-API-Contract: 0.2`。旧 HTTP 定义保存在 `packages/contracts/openapi-v0.1.yaml`，新取消事件
-必须带 `schema_version: "0.2"`。客户端须先升级，B05 才能开放取消。HTTP 测试中的取消记录是夹具，
-不代表取消操作已实现。
+无需请求体或 `Idempotency-Key`，请求体不参与处理。排队、已领取、执行中和等待重试的工作
+均可取消。成功返回 `200` 和当前 Run，Run 与 Task 都为 `CANCELLED`；租约清空，输出省略，
+尝试次数、重试时间与历史记录保留。已取消时重复请求同样返回 `200`，不改变版本、时间或追加事件。
+不存在的 Run 返回 `404 {code: not_found, ...}`；已成功 / 失败的 Run 返回
+`409 {code: cancellation_conflict, ...}`，保留原状态和结果。
+
+取消在同一数据库事务中保存状态并依次追加 `TaskCancelled -> RunCancelled`，事件写入失败则
+全部回滚。取消与成功、最终失败竞争时，先有效提交的终态事务获胜；已提交的重试仍可取消。
+取消后 worker 不能再领取或回收该 Task，旧 owner、旧 attempt 或旧版本提交的迟到结果均无效。
+成功、失败、取消都是不可逆终态，规则见 [ADR 0005](docs/adr/0005-cancellation-foundation.md)。
+
+当前执行器仍在持有 Task 行锁的事务内调用，取消可能等待正在执行的事务结束；若该事务先成功
+提交，取消会返回 `409`。取消不撤销已发生的外部操作，也不保证立即中断外部调用。长事务拆分
+属于 B06，心跳续租属于 B07，本任务尚未提供这些能力。fake worker 通常很快完成，演示中取消
+已完成的 Run 得到 `409` 属于正常结果；自动测试通过受控执行器和数据库同步覆盖各取消阶段。
+
+B05 复用 B04 的 V4 迁移，无新增迁移，V1–V4 未改动；历史事件不回填 schema_version。
+Run / timeline 成功查询及取消成功响应带 `Nexus-API-Contract: 0.2`。旧 HTTP 定义保存在
+`packages/contracts/openapi-v0.1.yaml`，实际取消事件带 `schema_version: "0.2"`，其他既有事件
+仍省略版本。启用取消前，客户端须先支持 CANCELLED 和混合版本事件。
 
 ## 测试
 
@@ -136,7 +151,7 @@ docker compose -f deploy/docker-compose.test.yml down
 
 测试覆盖如下场景：
 
-- 真实 HTTP 服务的四个接口、固定成功输出、完整有序时间线、请求校验和 400 / 404 / 409 错误码。
+- 真实 HTTP 服务的五个接口、固定成功输出、完整有序时间线、请求校验和 400 / 404 / 409 错误码。
 - 顺序和并发幂等创建；同键不同 input 或有效 Session 的竞争只保留一个 Run / Task 和一组创建事件。
 - 多个独立 worker 通过独立事务竞争单个或多个 Task，每个 Task 只领取一次，完成后不再执行。
 - 关闭并重建整个 Spring 应用上下文及连接池后，成功结果和事件保持不变，定时 worker 继续处理排队任务；
@@ -144,6 +159,10 @@ docker compose -f deploy/docker-compose.test.yml down
 - 数据库拒绝事件 UPDATE / DELETE，原时间线的数量和内容不变。
 - 退避到期前不可领取、重试成功、耗尽失败、租约过期、重复与迟到报告、多个 watchdog 竞争、
   成功与失败竞争、事务回滚和成功任务不再执行。
+- 四个阶段取消、并发重复取消、终态冲突、真实版本化事件及合约反例；取消与领取、成功、失败、
+  重试、watchdog 按两种先后顺序使用独立事务竞争；首个事务持锁时观察第二个事务确已等待或
+  通过 SKIP LOCKED 跳过，再放行提交。数据库触发器注入第一 / 第二条取消事件写入失败，
+  验证状态、租约和事件一起回滚；已回滚的取消不算竞争获胜。
 
 HTTP 回归测试为避免后台调度干扰并发创建断言，禁用定时 worker，通过独立事务主动推进真实 fake worker；
 重启测试另行启用真实定时 worker 验证自动执行。租约和退避测试直接调整独立测试库的时间字段，避免长时间等待。
@@ -176,7 +195,7 @@ Docker 构建上下文也使用仓库根目录。
 集成测试仍串行运行，避免共享清表互相干扰。
 
 每次 CI 使用新 runner 的工作区，不复用旧测试报告。Maven 返回成功后仍要检查 Surefire XML：
-所有 10 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
+所有 11 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
 不一致的计数或损坏内容都会使 CI 失败。新增或重命名测试类时，同步维护
 `scripts/check-test-reports.py` 的 `REQUIRED_SUITES`；发现的其他测试类也接受同样检查。
 所以即使漏配 `TEST_DB_URL` 导致 Maven 跳过集成测试，整次 CI 也不会显示成功。
@@ -201,7 +220,7 @@ python3 scripts/check-test-reports.py
 可能没有 Surefire 报告，CI 会保留当时可获取的日志。
 
 本地验证不等同于 GitHub 平台验收；首次推送后还需确认一次真实 Actions 运行完成、
-附件可下载且清理步骤执行。B03 的实际验证与未完成项见 [当前任务](docs/backlog.md#当前任务)。
+附件可下载且清理步骤执行。B03 的实际验证与未完成项见 [完成记录](docs/backlog.md#完成记录)。
 
 ## 目录
 

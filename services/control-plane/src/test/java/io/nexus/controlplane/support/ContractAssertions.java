@@ -34,7 +34,7 @@ public final class ContractAssertions {
     private ContractAssertions() { }
 
     public static void response(String path, String method, ResponseEntity<JsonNode> response) {
-        if (method.equals("get") && response.getStatusCode().is2xxSuccessful()) {
+        if ((method.equals("get") || path.endsWith("/cancel")) && response.getStatusCode().is2xxSuccessful()) {
             assertThat(response.getHeaders().getFirst("Nexus-API-Contract")).isEqualTo("0.2");
         }
         assertThat(response.getHeaders().getContentType()).isNotNull()

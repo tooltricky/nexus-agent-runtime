@@ -53,24 +53,13 @@ class RuntimeHttpIntegrationTest {
     }
 
     @Test
-    void cancellationFixturesAreReadableButNoCancellationEndpointIsRegistered() throws Exception {
-        // This fixture verifies B04 read support, not B05 cancellation behavior.
-        String runId = accepted(create("cancelled-fixture", body(sessionId, "test")));
-        String taskId = store.findTasks(runId).getFirst().id();
-        jdbc.update("UPDATE runs SET status = 'CANCELLED' WHERE id = ?", runId);
-        jdbc.update("UPDATE tasks SET status = 'CANCELLED' WHERE id = ?", taskId);
-        for (JsonNode sample : ContractAssertions.resource("examples/events-cancelled-v0.2.json")) {
-            String kind = sample.path("aggregate_type").asText();
-            var payload = sample.path("payload").deepCopy();
-            if (kind.equals("RUN")) ((com.fasterxml.jackson.databind.node.ObjectNode) payload).put("task_id", taskId);
-            jdbc.update("""
-                    INSERT INTO domain_events
-                        (event_id, aggregate_type, aggregate_id, run_id, task_id, event_type, payload, schema_version)
-                    VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb), '0.2')
-                    """, "evt_" + UUID.randomUUID(), kind, kind.equals("TASK") ? taskId : runId,
-                    runId, kind.equals("TASK") ? taskId : null, sample.path("event_type").asText(), payload.toString());
-        }
+    void cancellationEndpointWritesVersionedEventsAndSupportsMixedTimeline() throws Exception {
+        String runId = accepted(create("cancelled-http", body(sessionId, "test")));
+        var response = http.postForEntity("/v1/runs/" + runId + "/cancel", null, JsonNode.class);
+        ContractAssertions.response("/v1/runs/{run_id}/cancel", "post", response);
+        assertThat(response.getStatusCode().value()).isEqualTo(200);
         JsonNode result = get("/v1/runs/" + runId);
+        assertThat(response.getBody()).isEqualTo(result);
         assertThat(result.path("status").asText()).isEqualTo("CANCELLED");
         assertThat(result.path("tasks").get(0).path("status").asText()).isEqualTo("CANCELLED");
         JsonNode events = get("/v1/runs/" + runId + "/timeline").path("events");
@@ -79,12 +68,10 @@ class RuntimeHttpIntegrationTest {
             ContractAssertions.event(event);
             assertThat(event.has("schema_version")).isEqualTo(event.path("event_type").asText().endsWith("Cancelled"));
         }
-        var mappings = context.getBean("requestMappingHandlerMapping",
-                org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping.class);
-        assertThat(mappings.getHandlerMethods().keySet()).noneMatch(mapping ->
-                mapping.getPatternValues().stream().anyMatch(pattern -> pattern.contains("/cancel")));
-        assertThat(http.postForEntity("/v1/runs/" + runId + "/cancel", null, JsonNode.class)
-                .getStatusCode().value()).isEqualTo(404);
+        var repeated = http.postForEntity("/v1/runs/" + runId + "/cancel", null, JsonNode.class);
+        ContractAssertions.response("/v1/runs/{run_id}/cancel", "post", repeated);
+        assertThat(repeated.getBody()).isEqualTo(result);
+        assertThat(get("/v1/runs/" + runId + "/timeline").path("events")).isEqualTo(events);
     }
 
     @Test

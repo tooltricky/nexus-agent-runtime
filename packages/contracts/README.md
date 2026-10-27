@@ -10,6 +10,8 @@
 错误字段类型（包括数字/布尔值，不自动转换为字符串）、无法反序列化的 JSON 和非法幂等键返回 `400 {code: invalid_request, message: ...}`。
 错误消息不是稳定的机器判断依据，客户端应使用 code。Session 创建不消费请求体，两个查询接口
 不声明输入校验型 400；资源不存在返回 404，幂等冲突返回 409。
+取消接口无需请求体或幂等键，请求体忽略；成功或重复取消返回 200 和当前 CANCELLED Run，
+已成功 / 失败返回 `409 {code: cancellation_conflict, message: ...}`，不存在返回 404。
 
 Run / Task 的 `output` 在成功时提供，其他状态省略；租约 owner / 到期时间仅在 LEASED /
 EXECUTING 提供，其他状态省略。以上字段不返回 JSON null。`attempt`、`max_attempts`、
@@ -34,16 +36,21 @@ aggregate_id 的关联、退避计算与数据库状态一致）仍由领域/集
 - 每次演进同时更新实现、合约、正反例与必要的历史版本样本。兼容字段应能被当前校验器读取；
   破坏性变更不得以放宽旧版本枚举掩盖。
 
-自动检查位于 `ContractValidationTest`、`RuntimeHttpIntegrationTest` 和 `TaskRetryIntegrationTest`。
-前者无需数据库；后两者使用独立 PostgreSQL，并覆盖真实 HTTP 成功/错误/中间状态/重试终态、
-成功/失败/租约过期事件，以及对真实事件删除必填字段或替换错误类型的反例。
+自动检查位于 `ContractValidationTest`、`CancellationContractTest`、`RuntimeHttpIntegrationTest`、
+`TaskRetryIntegrationTest` 和 `RunCancellationIntegrationTest`。前两者无需数据库；后三者使用
+独立 PostgreSQL，覆盖真实 HTTP 成功/错误/中间状态/重试终态/取消、成功/失败/租约过期/取消事件，
+以及对真实事件删除必填字段或替换错误类型的反例。
 校验显式启用 date-time format assertion，所有 `$ref` 从本地合约资源解析，不依赖在线 Schema 服务。
 运行方式及数据库安全要求见根目录 [README](../../README.md#测试)。
 
-## B04：取消与版本边界
+## B04 / B05：取消与版本边界
 
-B04 准备取消规则、迁移、读取支持和数据合约，尚无取消 HTTP 入口。具体规则见
+B04 准备取消规则、迁移、读取支持和数据合约；B05 提供 `POST /v1/runs/{run_id}/cancel`，
+在同一事务中取消 Run / Task、清除租约并写入 TaskCancelled → RunCancelled，失败一起回滚。
+重复取消无状态变化或重复事件，与成功 / 最终失败竞争时先有效提交的终态事务获胜。具体规则见
 [ADR 0005](../../docs/adr/0005-cancellation-foundation.md)。Run 的 CREATED / QUEUED / RUNNING、
 Task 的 PENDING / LEASED / EXECUTING / RETRYING 可以进入 CANCELLED；终态不可再转换。
 取消事件使用 schema_version `0.2`，旧事件仍使用无版本的冻结 Schema。成功 GET Run / timeline
-带 `Nexus-API-Contract: 0.2`，不提供旧版响应协商。样本位于 `examples/`，原子取消和并发验证属于 B05。
+和 POST cancel 带 `Nexus-API-Contract: 0.2`，不提供旧版响应协商。样本位于 `examples/`；
+取消成功响应要求 Run 与唯一 Task 均为 CANCELLED；取消冲突与幂等冲突使用不同的错误 Schema。
+取消可能等待正在执行的事务，不保证立即中断外部调用或撤销外部副作用。当前尚无心跳续租接口。

@@ -13,6 +13,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class CancellationContractTest {
     @Test
+    void cancelSuccessRequiresCancelledRunAndTask() {
+        ObjectNode run = (ObjectNode) ContractAssertions.resource("examples/run-cancelled-v0.2.json");
+        String path = "/v1/runs/{run_id}/cancel";
+        assertThat(ContractAssertions.responseErrors(path, "post", 200, run)).isEmpty();
+        ObjectNode task = (ObjectNode) run.path("tasks").get(0);
+        task.put("status", "PENDING");
+        assertThat(ContractAssertions.responseErrors(path, "post", 200, run)).isNotEmpty();
+        task.put("status", "CANCELLED");
+        run.put("status", "QUEUED");
+        assertThat(ContractAssertions.responseErrors(path, "post", 200, run)).isNotEmpty();
+    }
+
+    @Test
+    void cancelConflictCannotBeConfusedWithIdempotencyConflict() {
+        ObjectNode error = com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                .put("code", "cancellation_conflict").put("message", "Completed Run cannot be cancelled");
+        String path = "/v1/runs/{run_id}/cancel";
+        assertThat(ContractAssertions.responseErrors(path, "post", 409, error)).isEmpty();
+        assertThat(ContractAssertions.responseErrors("/v1/runs", "post", 409, error)).isNotEmpty();
+        error.put("code", "idempotency_conflict");
+        assertThat(ContractAssertions.responseErrors(path, "post", 409, error)).isNotEmpty();
+    }
+
+    @Test
     void archivedRunAndEveryHistoricalEventRemainReadableUnderBothContracts() {
         JsonNode run = ContractAssertions.resource("examples/run-v0.1.json");
         assertThat(ContractAssertions.legacyRunErrors(run)).isEmpty();

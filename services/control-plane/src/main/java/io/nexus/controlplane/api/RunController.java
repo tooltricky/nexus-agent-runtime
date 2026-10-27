@@ -5,6 +5,7 @@ import io.nexus.controlplane.api.ApiModels.CreateRunRequest;
 import io.nexus.controlplane.api.ApiModels.RunResponse;
 import io.nexus.controlplane.api.ApiModels.TimelineResponse;
 import io.nexus.controlplane.service.RuntimeService;
+import io.nexus.controlplane.service.RunCancellationService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -25,9 +26,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/v1/runs")
 public class RunController {
     private final RuntimeService runtimeService;
+    private final RunCancellationService cancellations;
 
-    public RunController(RuntimeService runtimeService) {
+    public RunController(RuntimeService runtimeService, RunCancellationService cancellations) {
         this.runtimeService = runtimeService;
+        this.cancellations = cancellations;
     }
 
     @PostMapping
@@ -42,6 +45,11 @@ public class RunController {
     @GetMapping("/{runId}")
     public ResponseEntity<RunResponse> getRun(@PathVariable String runId) {
         return ResponseEntity.ok().header("Nexus-API-Contract", "0.2").body(runtimeService.getRun(runId));
+    }
+
+    @PostMapping("/{runId}/cancel")
+    public ResponseEntity<RunResponse> cancelRun(@PathVariable String runId) {
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.2").body(cancellations.cancel(runId));
     }
 
     @GetMapping("/{runId}/timeline")
