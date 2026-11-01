@@ -25,9 +25,15 @@ management:
         enabled: true
 
 nexus:
+  watchdog:
+    enabled: ${LEASE_WATCHDOG_ENABLED:true}
   worker:
     enabled: ${FAKE_WORKER_ENABLED:true}
     poll-delay-ms: ${FAKE_WORKER_POLL_DELAY_MS:200}
     lease-duration-ms: ${FAKE_WORKER_LEASE_DURATION_MS:30000}
+    execution-concurrency: ${FAKE_WORKER_EXECUTION_CONCURRENCY:16}
+    watchdog-poll-delay-ms: ${LEASE_WATCHDOG_POLL_DELAY_MS:1000}
+    watchdog-batch-size: ${LEASE_WATCHDOG_BATCH_SIZE:50}
+    dispatch-retry-delay-ms: ${FAKE_WORKER_DISPATCH_RETRY_DELAY_MS:200}
     retry-initial-delay-ms: ${FAKE_WORKER_RETRY_INITIAL_DELAY_MS:1000}
     retry-max-delay-ms: ${FAKE_WORKER_RETRY_MAX_DELAY_MS:30000}

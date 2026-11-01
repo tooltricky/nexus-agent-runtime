@@ -17,7 +17,9 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.Optional;
 
 @Repository
@@ -94,6 +96,9 @@ public class RuntimeStore {
     public record TaskClaim(TaskRecord task, TaskStatus previousStatus) {
     }
 
+    public record TaskFence(String taskId, int attempt, long version) {
+    }
+
     /** Atomically claims the oldest task ready to run and writes its lease. */
     public Optional<TaskClaim> claimNextTask(String leaseOwner, Duration leaseDuration) {
         long leaseMillis = leaseDuration.toMillis();
@@ -124,16 +129,48 @@ public class RuntimeStore {
     }
 
     public Optional<TaskRecord> findOwnedActiveTaskForUpdate(String leaseOwner) {
+        return findOwnedActiveTaskForUpdate(leaseOwner, Set.of());
+    }
+
+    public Optional<TaskRecord> findOwnedActiveTaskForUpdate(String leaseOwner, Set<TaskFence> inFlight) {
+        List<TaskFence> fences = new ArrayList<>(inFlight);
+        String excluded = fences.isEmpty() ? "" : " AND NOT (status = 'EXECUTING' AND (id, attempt, version) IN ("
+                + fences.stream().map(fence -> "(?, ?, ?)").reduce((left, right) -> left + ", " + right).orElseThrow()
+                + "))";
+        List<Object> parameters = new java.util.ArrayList<>();
+        parameters.add(leaseOwner);
+        fences.forEach(fence -> {
+            parameters.add(fence.taskId());
+            parameters.add(fence.attempt());
+            parameters.add(fence.version());
+        });
         return jdbc.query("""
                         SELECT * FROM tasks
                         WHERE status IN ('LEASED', 'EXECUTING')
                           AND lease_owner = ?
+                          AND lease_expires_at > clock_timestamp()
+                          %s
                         ORDER BY created_at, id
                         FOR UPDATE SKIP LOCKED
                         LIMIT 1
-                        """, this::mapTask, leaseOwner)
+                        """.formatted(excluded), this::mapTask, parameters.toArray())
                 .stream()
                 .findFirst();
+    }
+
+    public boolean hasLiveExecutingLease(TaskRecord task, String leaseOwner) {
+        Boolean exists = jdbc.queryForObject("""
+                SELECT EXISTS(
+                    SELECT 1 FROM tasks
+                    WHERE id = ?
+                      AND status = 'EXECUTING'
+                      AND version = ?
+                      AND attempt = ?
+                      AND lease_owner = ?
+                      AND lease_expires_at > clock_timestamp()
+                )
+                """, Boolean.class, task.id(), task.version(), task.attempt(), leaseOwner);
+        return Boolean.TRUE.equals(exists);
     }
 
     public void transitionRun(RunRecord run, RunStatus next, JsonNode output) {
@@ -163,6 +200,9 @@ public class RuntimeStore {
             JsonNode output,
             String leaseOwner
     ) {
+        if (task.status() == next) {
+            return false;
+        }
         task.status().requireTransitionTo(next);
         int updated = jdbc.update("""
                 UPDATE tasks
@@ -184,14 +224,15 @@ public class RuntimeStore {
     }
 
     /** Locks expired attempts for the watchdog; state and events are committed by the caller. */
-    public List<TaskRecord> findExpiredLeasesForUpdate() {
+    public List<TaskRecord> findExpiredLeasesForUpdate(int batchSize) {
         return jdbc.query("""
                 SELECT * FROM tasks
                 WHERE status IN ('LEASED', 'EXECUTING')
                   AND lease_expires_at <= clock_timestamp()
                 ORDER BY lease_expires_at, id
+                LIMIT ?
                 FOR UPDATE SKIP LOCKED
-                """, this::mapTask);
+                """, this::mapTask, batchSize);
     }
 
     public Optional<TaskRecord> finishFailedAttempt(

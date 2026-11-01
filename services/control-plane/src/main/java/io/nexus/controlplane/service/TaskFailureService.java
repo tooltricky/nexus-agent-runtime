@@ -35,9 +35,25 @@ public class TaskFailureService {
 
     @Transactional
     public void recoverExpiredLeases() {
-        for (TaskRecord task : store.findExpiredLeasesForUpdate()) {
-            finishAttempt(task, task.leaseOwner(), true, null);
+        recoverExpiredLeasesInternal(100);
+    }
+
+    @Transactional
+    public int recoverExpiredLeases(int batchSize) {
+        if (batchSize < 1) {
+            throw new IllegalArgumentException("Watchdog batch size must be positive");
         }
+        return recoverExpiredLeasesInternal(batchSize);
+    }
+
+    private int recoverExpiredLeasesInternal(int batchSize) {
+        int recovered = 0;
+        for (TaskRecord task : store.findExpiredLeasesForUpdate(batchSize)) {
+            if (finishAttempt(task, task.leaseOwner(), true, null)) {
+                recovered++;
+            }
+        }
+        return recovered;
     }
 
     private boolean finishAttempt(TaskRecord task, String leaseOwner, boolean expired, String error) {

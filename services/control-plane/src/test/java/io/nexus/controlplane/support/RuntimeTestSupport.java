@@ -1,14 +1,12 @@
 package io.nexus.controlplane.support;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.nexus.controlplane.persistence.RuntimeStore;
 import io.nexus.controlplane.service.FakeTaskExecutor;
 import io.nexus.controlplane.service.FakeWorkerService;
 import io.nexus.controlplane.service.TaskFailureService;
+import io.nexus.controlplane.service.WorkerTransactionService;
 import org.springframework.context.ApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,13 +28,12 @@ public final class RuntimeTestSupport {
 
     public static FakeWorkerService worker(ApplicationContext context) {
         ObjectMapper mapper = context.getBean(ObjectMapper.class);
-        return new FakeWorkerService(context.getBean(RuntimeStore.class), mapper,
+        return new FakeWorkerService(context.getBean(WorkerTransactionService.class),
                 context.getBean(TaskFailureService.class), new FakeTaskExecutor(mapper), 30_000);
     }
 
     public static void tick(ApplicationContext context, FakeWorkerService worker) {
-        new TransactionTemplate(context.getBean(PlatformTransactionManager.class))
-                .executeWithoutResult(s -> worker.advanceOneTask());
+        worker.advanceOneTask();
     }
 
     public static <T> List<T> concurrently(List<Callable<T>> actions) throws Exception {

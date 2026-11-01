@@ -2,6 +2,7 @@ package io.nexus.controlplane.service;
 
 import io.nexus.controlplane.api.ApiModels.CreateRunRequest;
 import io.nexus.controlplane.domain.Records.EventRecord;
+import io.nexus.controlplane.domain.RunStatus;
 import io.nexus.controlplane.domain.TaskStatus;
 import io.nexus.controlplane.persistence.RuntimeStore;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,24 +11,33 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import java.util.ArrayList;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Callable;
 import java.util.stream.IntStream;
 
 import static io.nexus.controlplane.support.RuntimeTestSupport.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.awaitility.Awaitility.await;
 
 @EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 @SpringBootTest(properties = {
         "nexus.worker.enabled=false",
+        "nexus.watchdog.enabled=false",
         "spring.datasource.url=${TEST_DB_URL}",
         "spring.datasource.username=${TEST_DB_USERNAME:nexus}",
         "spring.datasource.password=${TEST_DB_PASSWORD:nexus}"
@@ -37,6 +47,12 @@ class RuntimePersistenceIntegrationTest {
     @Autowired RuntimeStore store;
     @Autowired JdbcTemplate jdbc;
     @Autowired ApplicationContext context;
+    @Autowired WorkerTransactionService workerTransactions;
+    @Autowired TaskFailureService failures;
+    @Autowired @Qualifier("workerExecutionExecutor") Executor workerExecutionExecutor;
+
+    @Autowired @Qualifier("workerTaskScheduler") ThreadPoolTaskScheduler workerTaskScheduler;
+    @Autowired @Qualifier("watchdogTaskScheduler") ThreadPoolTaskScheduler watchdogTaskScheduler;
 
     @BeforeEach
     void reset() {
@@ -102,5 +118,53 @@ class RuntimePersistenceIntegrationTest {
             assertThat(store.findTimeline(run)).isEqualTo(before);
             assertThat(jdbc.queryForObject("SELECT count(*) FROM domain_events", Integer.class)).isEqualTo(8);
         }
+    }
+
+    @Test
+    void workerAndWatchdogUseIndependentSchedulers() {
+        assertThat(workerTaskScheduler).isNotSameAs(watchdogTaskScheduler);
+        assertThat(workerTaskScheduler.getThreadNamePrefix()).isEqualTo("nexus-worker-");
+        assertThat(watchdogTaskScheduler.getThreadNamePrefix()).isEqualTo("nexus-watchdog-");
+        assertThat(workerTaskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize()).isEqualTo(1);
+        assertThat(watchdogTaskScheduler.getScheduledThreadPoolExecutor().getCorePoolSize()).isEqualTo(1);
+    }
+
+    @Test
+    void oneScheduledWorkerAdvancesAnotherRunWhileFirstExecutorBlocks() throws Exception {
+        String session = runtime.createSession().sessionId();
+        String blockedRun = runtime.createRun("blocked", new CreateRunRequest(session, "blocked" )).runId();
+        String freeRun = runtime.createRun("free", new CreateRunRequest(session, "free" )).runId();
+        CountDownLatch blockedStarted = new CountDownLatch(1);
+        CountDownLatch releaseBlocked = new CountDownLatch(1);
+        TaskExecutor executor = task -> {
+            if (task.input().path("input").asText().equals("blocked")) {
+                blockedStarted.countDown();
+                try {
+                    if (!releaseBlocked.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("blocked executor was not released");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("blocked executor interrupted", interrupted);
+                }
+            }
+            return context.getBean(com.fasterxml.jackson.databind.ObjectMapper.class)
+                    .createObjectNode().put("summary", task.input().path("input").asText());
+        };
+        FakeWorkerService worker = new FakeWorkerService(workerTransactions, failures, executor,
+                workerExecutionExecutor, 30_000);
+        ScheduledFuture<?> schedule = workerTaskScheduler.scheduleAtFixedRate(worker::advanceOneTask,
+                Duration.ofMillis(20));
+        try {
+            assertThat(blockedStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(store.findRun(freeRun).orElseThrow().status()).isEqualTo(RunStatus.SUCCEEDED));
+            assertThat(store.findRun(blockedRun).orElseThrow().status()).isEqualTo(RunStatus.RUNNING);
+        } finally {
+            releaseBlocked.countDown();
+            schedule.cancel(false);
+        }
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(store.findRun(blockedRun).orElseThrow().status()).isEqualTo(RunStatus.SUCCEEDED));
     }
 }

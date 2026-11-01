@@ -6,6 +6,7 @@ import io.nexus.controlplane.persistence.RuntimeStore;
 import io.nexus.controlplane.support.ContractAssertions;
 import io.nexus.controlplane.service.FakeWorkerService;
 import io.nexus.controlplane.service.TaskFailureService;
+import io.nexus.controlplane.service.WorkerTransactionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -34,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "nexus.worker.enabled=false",
+        "nexus.watchdog.enabled=false",
         "spring.datasource.url=${TEST_DB_URL}",
         "spring.datasource.username=${TEST_DB_USERNAME:nexus}",
         "spring.datasource.password=${TEST_DB_PASSWORD:nexus}"
@@ -237,7 +239,7 @@ class RuntimeHttpIntegrationTest {
     private void verifyFailedAttempts(boolean exhaust, boolean expired) throws Exception {
         String runId = accepted(create("failure-contract", body(sessionId, "failure contract")));
         var failures = context.getBean(TaskFailureService.class);
-        var failingWorker = new FakeWorkerService(store, mapper, failures, task -> {
+        var failingWorker = new FakeWorkerService(context.getBean(WorkerTransactionService.class), failures, task -> {
             throw new IllegalStateException("controlled failure");
         }, 30_000);
         for (int attempt = 1; attempt <= (exhaust ? 3 : 1); attempt++) {

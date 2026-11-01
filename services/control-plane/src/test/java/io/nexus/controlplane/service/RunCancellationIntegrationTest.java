@@ -45,6 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "nexus.worker.enabled=false",
+        "nexus.watchdog.enabled=false",
         "nexus.worker.retry-initial-delay-ms=60000",
         "nexus.worker.retry-max-delay-ms=240000",
         "spring.datasource.url=${TEST_DB_URL}",
@@ -57,6 +58,7 @@ class RunCancellationIntegrationTest {
     @Autowired RunCancellationService cancellations;
     @Autowired RuntimeStore store;
     @Autowired TaskFailureService failures;
+    @Autowired WorkerTransactionService workerTransactions;
     @Autowired ObjectMapper mapper;
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager transactionManager;
@@ -72,7 +74,7 @@ class RunCancellationIntegrationTest {
         clearDatabase(jdbc);
         runId = runtime.createRun(UUID.randomUUID().toString(),
                 new CreateRunRequest(runtime.createSession().sessionId(), "cancel test")).runId();
-        worker = new FakeWorkerService(store, mapper, failures, new FakeTaskExecutor(mapper), 30_000);
+        worker = new FakeWorkerService(workerTransactions, failures, new FakeTaskExecutor(mapper), 30_000);
     }
 
     @AfterEach
@@ -425,7 +427,7 @@ class RunCancellationIntegrationTest {
     }
 
     private void tick() {
-        tx.executeWithoutResult(s -> worker.advanceOneTask());
+        worker.advanceOneTask();
     }
 
     private TaskRecord task() {

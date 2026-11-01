@@ -117,10 +117,25 @@ curl -i -X POST http://localhost:8080/v1/runs/<run_id>/cancel
 取消后 worker 不能再领取或回收该 Task，旧 owner、旧 attempt 或旧版本提交的迟到结果均无效。
 成功、失败、取消都是不可逆终态，规则见 [ADR 0005](docs/adr/0005-cancellation-foundation.md)。
 
-当前执行器仍在持有 Task 行锁的事务内调用，取消可能等待正在执行的事务结束；若该事务先成功
-提交，取消会返回 `409`。取消不撤销已发生的外部操作，也不保证立即中断外部调用。长事务拆分
-属于 B06，心跳续租属于 B07，本任务尚未提供这些能力。fake worker 通常很快完成，演示中取消
-已完成的 Run 得到 `409` 属于正常结果；自动测试通过受控执行器和数据库同步覆盖各取消阶段。
+执行器调用不持有 Task 行锁的数据库事务：领取、进入执行和提交结果分别使用短事务，执行器
+运行期间其他 Run 和 watchdog 仍可推进。提交结果会校验 owner、attempt、version 和有效租约，
+因此租约过期后旧执行者的迟到结果会被拒绝。取消不撤销已发生的外部操作，也不保证立即中断
+外部调用。心跳续租属于 B07，本任务尚未提供该能力。fake worker 通常很快完成，演示中取消已
+完成的 Run 得到 `409` 属于正常结果；自动测试通过受控执行器和数据库同步覆盖各取消阶段。
+
+worker 和 lease watchdog 使用两个独立的定时线程；worker 领取后把执行工作提交到独立的
+执行线程池，因此同一个进程中一个 Run 的执行器阻塞时，其他 Run 仍能继续领取和推进。
+worker 会先预留执行名额再领取任务，执行线程池不保留等待队列；没有空闲名额时，任务继续
+保持 `PENDING`，不会提前开始租约或消耗 attempt。并发名额由
+`FAKE_WORKER_EXECUTION_CONCURRENCY` 配置，默认 16。
+如果执行线程池暂时没有容量，派发会被短暂退避，不会阻塞调度线程或反复选择同一个旧任务；
+退避时间由 `FAKE_WORKER_DISPATCH_RETRY_DELAY_MS` 配置，默认 200 毫秒，到期后再尝试派发。
+执行线程在真正调用执行器前会再次检查 owner、attempt、version 和有效租约。watchdog 仍能
+独立回收过期租约，即使 `FAKE_WORKER_ENABLED=false` 停止 fake worker 领取和执行也会继续工作；
+可通过 `LEASE_WATCHDOG_ENABLED=false` 显式关闭 watchdog，默认保持开启。
+每轮最多处理 `LEASE_WATCHDOG_BATCH_SIZE` 个任务，默认 50，轮询间隔由
+`LEASE_WATCHDOG_POLL_DELAY_MS` 配置，默认 1 秒。已过期的 `LEASED` / `EXECUTING` 任务不会
+再次进入执行器，必须先由 watchdog 回收。
 
 B05 复用 B04 的 V4 迁移，无新增迁移，V1–V4 未改动；历史事件不回填 schema_version。
 Run / timeline 成功查询及取消成功响应带 `Nexus-API-Contract: 0.2`。旧 HTTP 定义保存在
@@ -158,7 +173,7 @@ docker compose -f deploy/docker-compose.test.yml down
   `LEASED` / `EXECUTING` 的有效旧租约受到保护，过期后先回收并退避，再由新 owner 接管，拒绝旧 owner 的迟到报告。
 - 数据库拒绝事件 UPDATE / DELETE，原时间线的数量和内容不变。
 - 退避到期前不可领取、重试成功、耗尽失败、租约过期、重复与迟到报告、多个 watchdog 竞争、
-  成功与失败竞争、事务回滚和成功任务不再执行。
+  成功与失败竞争、事务回滚、执行池拒绝后的派发退避和成功任务不再执行。
 - 四个阶段取消、并发重复取消、终态冲突、真实版本化事件及合约反例；取消与领取、成功、失败、
   重试、watchdog 按两种先后顺序使用独立事务竞争；首个事务持锁时观察第二个事务确已等待或
   通过 SKIP LOCKED 跳过，再放行提交。数据库触发器注入第一 / 第二条取消事件写入失败，

@@ -84,6 +84,7 @@ class RuntimeRestartIntegrationTest {
 
         // Advance persisted test timestamps instead of sleeping through the production lease/backoff.
         jdbc().update("UPDATE tasks SET lease_expires_at = clock_timestamp() - INTERVAL '1 second' WHERE run_id = ?", run);
+        application.getBean(TaskFailureService.class).recoverExpiredLeases();
         tick(application, newWorker);
         TaskRecord retry = task(run);
         assertThat(retry.status()).isEqualTo(TaskStatus.RETRYING);
@@ -126,12 +127,40 @@ class RuntimeRestartIntegrationTest {
         assertThat(events).extracting(EventRecord::sequence).isSorted().doesNotHaveDuplicates();
     }
 
+    @ParameterizedTest
+    @EnumSource(value = TaskStatus.class, names = {"LEASED", "EXECUTING"})
+    void scheduledWatchdogRecoversLeasesWithFakeWorkerDisabled(TaskStatus stage) {
+        start(false, true);
+        clearDatabase(jdbc());
+        assertThat(application.getBeansOfType(FakeWorkerService.class)).isEmpty();
+        assertThat(application.getBeansOfType(LeaseWatchdogService.class)).hasSize(1);
+        String run = createRun("watchdog-only");
+        var manualWorker = worker(application);
+        tick(application, manualWorker);
+        if (stage == TaskStatus.EXECUTING) tick(application, manualWorker);
+        jdbc().update("UPDATE tasks SET lease_expires_at = clock_timestamp() - INTERVAL '1 second' WHERE run_id = ?", run);
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(task(run).status()).isEqualTo(TaskStatus.RETRYING));
+        assertThat(task(run).leaseOwner()).isNull();
+        assertThat(task(run).leaseExpiresAt()).isNull();
+        assertThat(task(run).attempt()).isEqualTo(1);
+        assertThat(store().findTimeline(run)).extracting(EventRecord::eventType)
+                .containsOnlyOnce("TaskLeaseExpired", "TaskRetried");
+    }
+
     private void start(boolean workerEnabled) {
+        start(workerEnabled, false);
+    }
+
+    private void start(boolean workerEnabled, boolean watchdogEnabled) {
         application = new SpringApplicationBuilder(ControlPlaneApplication.class).web(WebApplicationType.NONE).run(
                 "--spring.datasource.url=" + System.getenv("TEST_DB_URL"),
                 "--spring.datasource.username=" + System.getenv().getOrDefault("TEST_DB_USERNAME", "nexus"),
                 "--spring.datasource.password=" + System.getenv().getOrDefault("TEST_DB_PASSWORD", "nexus"),
                 "--nexus.worker.enabled=" + workerEnabled,
+                "--nexus.watchdog.enabled=" + watchdogEnabled,
+                "--nexus.worker.watchdog-poll-delay-ms=50",
                 "--nexus.worker.poll-delay-ms=50",
                 "--nexus.worker.retry-initial-delay-ms=60000",
                 "--nexus.worker.retry-max-delay-ms=240000");

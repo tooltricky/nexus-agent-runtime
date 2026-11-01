@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-截至 2026-10-27，项目是带租约、有限重试和原子取消的单任务 Runtime 骨架，B01–B05 已完成；当前保留 B05 方案与验收记录，B06 尚未开始。B03 的 CI 工作流、报告检查器、JAR 打包和 GitHub Actions 实跑均已验证；B05 已通过本地独立 PostgreSQL 验收。详细背景见 [README](../README.md)、[项目设计](project-design.md) 和 [ADR](adr/)。本文件只保留当前任务、未完成路线和精简完成记录；具体实现细节以代码和 Git 提交为准。
+截至 2026-10-29，项目是带租约、有限重试、原子取消和短事务执行的单任务 Runtime 骨架，B01–B06 已完成；当前保留 B06 方案与验收记录，未自动开始 B07。B03 的 CI 工作流、报告检查器、JAR 打包和 GitHub Actions 实跑均已验证；B05、B06 已通过本地独立 PostgreSQL 验收。详细背景见 [README](../README.md)、[项目设计](project-design.md) 和 [ADR](adr/)。本文件只保留当前任务、未完成路线和精简完成记录；具体实现细节以代码和 Git 提交为准。
 
 设计说明书是目标蓝图，ADR 是当前已接受的落地决策。继续优先采用 Spring Boot 模块化单体和 PostgreSQL；不把引入全部语言、中间件或拆分服务作为下一步的前置条件。改变既有语义或引入部署边界时补充 ADR。特别是 ADR 0003 已取代 ADR 0002 中“租约过期立即回到 PENDING”的行为。
 
@@ -128,31 +128,23 @@
 
 ## 当前任务
 
-**B05：实现 Run 取消接口与原子取消（已完成）**。依赖 B04；2026-10-27 已按方案实现并通过本地独立 PostgreSQL 验收，保留完整方案与审查基线。B06 尚未开始。
+**B06：将执行器调用移出长事务（已完成）**。依赖 B05；2026-10-29 已实现并完成本地独立 PostgreSQL 验收，未自动开始 B07。
 
-通俗地说，Run 是一张工作单，Task 是里面的具体工作。B04 已规定取消规则，本任务要接通真正可调用的“取消按钮”：工作单与具体工作一起取消、收回执行资格并留下记录；即使旧执行者稍后交回结果，也不能让已取消的工作重新变成成功或失败。
+通俗地说，Run 是一张工作单，Task 是里面的具体工作。B06 已把“更新任务状态”和“实际执行工作”分开：执行器运行时不再占着数据库任务行锁，其他工作和过期任务回收可以继续推进；过期执行者迟到交回的结果也会被识别并拒绝。
 
 | 字段 | 内容 |
 | --- | --- |
-| 任务编号 / 名称 | B05：实现 Run 取消接口与原子取消 |
-| 状态 | 2026-10-27 已实现并通过本地独立 PostgreSQL 全量验收；仅完成 B05，未开始 B06 |
-| 目标与范围 | 实现 `POST /v1/runs/{run_id}/cancel`，遵循 [ADR 0005](adr/0005-cancellation-foundation.md)：Run 与未完成 Task 在同一事务内进入 `CANCELLED`，清除租约、保留尝试次数、重试时间及历史事件，依次追加 `TaskCancelled`、`RunCancelled`。支持排队、已领取、执行中和等待重试时取消；重复取消成功但无重复事件，已成功 / 失败拒绝取消，不存在返回 404。阻止取消后领取、重试、过期回收或迟到成功 / 失败报告复活任务。 |
-| 实现方案 / 预计修改位置 | ① 先在 `services/control-plane/src/test/java/io/nexus/controlplane/` 补充取消服务、真实 HTTP、数据库并发和回滚测试；将 B04 中“未注册取消路由”的断言更新为 B05 的实际接口断言，保留历史合约与迁移回归。② 在 `service/` 建议新增 `RunCancellationService.java`，集中处理取消事务与重复调用；在 `persistence/RuntimeStore.java` 增加加锁读取、带状态 / 版本条件的取消更新及版本化事件写入，复用 B04 状态、V4 约束和 0.2 事件格式，取消事件明确写入 `schema_version: "0.2"`。③ 检查并按需修改 `FakeWorkerService.java`、`TaskFailureService.java` 与持久化更新条件，统一涉及 Run / Task 的加锁顺序，读取加锁后的最新状态，防止死锁、覆盖和迟到报告；事件写入失败必须使状态一起回滚。④ 在 `api/RunController.java` 接通入口，拟定成功及重复取消返回 200 和当前 Run，带 `Nexus-API-Contract: 0.2`；在 `ApiExceptionHandler.java` 等位置补充取消冲突错误处理，已成功 / 失败返回 409，使用区别于幂等创建冲突的错误标识。⑤ 更新 `packages/contracts/openapi.yaml` 的取消操作、响应及错误定义，复用现有取消事件 Schema，保留冻结的 0.1 合约；预计无需新迁移，如发现必须调整数据库则新增迁移，不回改 V1–V4。⑥ 更新 `README.md`、`packages/contracts/README.md` 和本任务实际结果；新增必需测试类时同步维护 `scripts/check-test-reports.py` 的 `REQUIRED_SUITES`。 |
-| 验收条件 | ① 真实接口分别取消 Run 为 QUEUED / Task 为 PENDING，以及 Run 为 RUNNING / Task 为 LEASED、EXECUTING、RETRYING 的场景；Run / Task 同为 CANCELLED，无输出，Task 租约清空，尝试次数、重试时间与历史事件保留。② 顺序及并发重复取消都成功，取消事件只有一组且顺序为 TaskCancelled → RunCancelled，版本和 payload 通过 0.2 合约校验；重试期间不新增 Run 的 RETRYING 状态。③ 已 SUCCEEDED / FAILED 的 Run 返回 409，状态、结果和事件不变；不存在的 Run 返回 404；真实成功 / 重复 / 错误响应与 OpenAPI 一致。④ 取消后不能再领取或重试；旧 owner、旧版本或旧 attempt 的迟到成功 / 失败报告均不能改状态或追加终态事件；watchdog 不再回收已取消 Task。⑤ 使用独立数据库连接和事务，受控同步取消与成功、最终失败、重试及 watchdog 的竞争，覆盖不同获胜顺序：以先有效提交的终态事务为准，最终 Run / Task 和事件一致，无双终态或死锁；已提交的重试仍可被取消。⑥ 注入取消事件写入失败，证明 Run / Task 状态、租约与本次事件全部回滚。⑦ 全量回归、合约校验和报告检查通过，数据库集成测试实际执行且无跳过，原有创建、领取、成功、失败、重试、迁移及历史事件查询行为不回退。 |
-| 实施分支 | `main`（2026-10-27 登记方案前读取；`git status --short` 无输出，工作区干净） |
-| 开始修改前的提交编号 | `87a599d400310105003a7dd49393edaf2b9e84da`（2026-10-27 读取的 HEAD；作为 B05 审查基线，审查须包含其后的提交、未提交修改及新建文件，本次方案文档也在审查范围内） |
-| 验证方式 | 清理本次验收前的旧 Surefire 报告，保留 `target/` 下 Maven 缓存；执行 `docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests`，再执行 `python3 scripts/check-test-reports.py` 并查看 XML 中的实际执行 / 失败 / 错误 / 跳过数；无论成功或失败，最后使用同一 Compose 文件 `down` 清理。若修改报告检查器，另运行 `python3 -B -m unittest discover -s scripts -p 'test_*.py' -v`。所有清表和迁移验证只使用独立测试库，不连接演示或业务数据库。 |
-| 实际修改与测试 | 新增 `RunCancellationService`、`CancellationConflictException` 和取消路由，成功 / 重复返回 200 与当前 Run、终态冲突 409、缺失 404。Task → Run 加锁顺序与 worker / 失败处理一致，取消时带状态 / 版本 / attempt 条件更新，清除租约并在同一事务写入 0.2 版本的两条取消事件；worker 成功 / 失败更新补充 attempt 围栏。复用 V4 和现有取消事件 Schema，无新增迁移，V1–V4、冻结 0.1 合约及事件 Schema 均未修改。更新 OpenAPI、ADR 0005、README 和合约说明；B04 的取消夹具 / 路由缺失测试改为真实 HTTP 取消回归。新增取消集成测试 24 项、合约反例 2 项，并登记报告检查器。清理旧报告后独立 Compose `verify` 通过：11 个测试类共 79 项，失败 / 错误 / 跳过均为 0，其中数据库集成 56 项实际执行；覆盖四个阶段取消、并发重复请求、迟到报告、领取 / 成功 / 最终失败 / 重试 / watchdog 双向竞争、取消事件第一 / 第二次写入失败回滚及取消回滚后最终失败获胜。报告检查通过，JAR 打包成功；Python 报告检查器回归 12 项通过，测试容器和网络已清理。 |
-| 未完成 / 边界 | B05 计划内功能与本地验收已完成，未执行新的 GitHub Actions 平台验收。当前执行器在持有行锁的事务内工作，取消可能等待该事务结束，若成功 / 最终失败先有效提交则返回 409；移出长事务、watchdog 独立轮询及分批回收属于 B06，不承诺本任务可立即中断外部调用，也不撤销已发生的外部副作用。当前尚无续租入口；B05 建立取消终态防护，真实心跳续租及取消后续租拒绝的验证留待 B07。 |
-| 下一步 | B05 完成后停止，保留方案及实际结果供审查；不自动开始 B06。 |
-
-已固定并在 B05 实现的取消规则（详见 ADR 0005）：
-
-- Run 的 `CREATED`、`QUEUED`、`RUNNING` 可进入 `CANCELLED`；`CREATED` 是创建事务中的内部阶段，现有创建流程不因此增加对外可取消窗口。Task 的 `PENDING`、`LEASED`、`EXECUTING`、`RETRYING` 可进入 `CANCELLED`。重试期间 Run 仍保持 `RUNNING`，不新增 Run 的 `RETRYING` 状态。
-- 取消成功时，Run 与未完成 Task 同事务进入 `CANCELLED`，清除 Task 租约，保留尝试次数、重试时间及历史事件，并依次记录 `TaskCancelled`、`RunCancelled`；事件追加失败时状态一同回滚。
-- 已取消后再次取消视为成功的无操作，不再执行一次状态转换或追加终态事件；已 `SUCCEEDED` / `FAILED` 的 Run 返回 409，不改写既有结果。不存在资源的取消请求返回 404。
-- 取消与成功、最终失败竞争时，以先成功提交的有效终态事务为准，回滚的操作不算获胜；取消与重试 / 租约回收竞争时串行判断最新状态，已经取消就不得再重试或回收。B05 已用真实数据库验证竞争结果和事件唯一性。
-- `CANCELLED` 是终态，不能再领取、续租、提交成功 / 失败或回到重试；旧执行者的迟到报告不能复活任务。取消不承诺撤销已经发生的外部副作用，也不等于立即中断正在运行的外部调用。
+| 任务编号 / 名称 | B06：将执行器调用移出长事务 |
+| 状态 | 2026-10-31 已实现并通过本地独立 PostgreSQL 全量验收；B06 完成，未开始 B07 |
+| 目标与范围 | 依照 B06 待办，将执行器调用移出持有任务行锁的事务；领取任务、进入执行、提交结果各使用短事务，并用 `attempt`、`version` 等围栏信息拒绝过期执行者的迟到结果。watchdog 独立轮询并分批回收过期租约。此任务不包含 B07 的心跳续租。 |
+| 实现方案 / 预计修改位置 | ① 先在 `services/control-plane/src/test/java/io/nexus/controlplane/service/` 补充阻塞执行器、并发推进、租约过期、数据库故障和事件回滚测试。② 重构 `service/FakeWorkerService.java`，将领取、标记执行、调用 `TaskExecutor`、提交结果拆成独立的短事务；执行器调用期间不持有任务行锁。③ 修改 `persistence/RuntimeStore.java` 的读取 / 更新接口，使状态提交同时校验任务状态、`attempt`、`version`、owner 和有效租约；旧 attempt 或旧版本的结果只能被拒绝，不能覆盖新状态。④ 调整 `service/TaskFailureService.java`，让 watchdog 使用独立轮询入口并分批锁定 / 回收过期任务；状态更新和对应事件仍在同一事务中提交。⑤ 根据事务边界变化更新 `services/control-plane/src/test/java/io/nexus/controlplane/support/RuntimeTestSupport.java` 及受影响的集成测试；仅在行为或配置说明改变时同步 README。是否需要数据库迁移以实现时的数据模型为准，不预设改动。 |
+| 验收条件 | ① 用可控阻塞执行器证明一个 Run 的执行被卡住时，其他 Run 仍可领取并推进。② 执行中的任务过期后，watchdog 能独立发现并分批回收，不会被该任务持有的行锁阻塞。③ 注入数据库故障时，故障不会被记录成模型 / 执行器失败，也不会错误消耗重试次数。④ 注入结果事件写入失败，证明对应状态变更与事件一起回滚。⑤ 执行器完成前租约过期并由新 attempt 接管后，旧执行者返回的成功或失败结果均被拒绝，不能改变新 attempt 的状态或追加错误终态事件。⑥ 现有领取、成功、失败、重试、取消、迁移和事件查询回归通过；独立 PostgreSQL 集成测试实际执行且无跳过，报告检查通过。 |
+| 实施分支 | `main`（登记方案时读取；工作区无未提交改动） |
+| 开始修改前的提交编号 | `226b67de9c70a9c63da8eaf606e987e79c174018`（登记方案时的 HEAD；后续审查以此为基线，并检查其后的提交、未提交修改及新建文件） |
+| 验证方式 | 清理本次验收前的旧 Surefire 报告并保留 `target/` 下 Maven 缓存；执行 `docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests`，再运行 `python3 scripts/check-test-reports.py` 并检查 XML 中测试的执行、失败、错误和跳过数量；无论成功或失败，最后使用同一 Compose 文件 `down` 清理。若修改报告检查器，另运行 `python3 -B -m unittest discover -s scripts -p 'test_*.py' -v`。数据库集成验证只使用独立测试库，不连接演示或业务数据库。 |
+| 实际修改与测试 | 新增 `WorkerTransactionService`，将领取 / 进入执行 / 成功提交拆为独立短事务；执行器调用移到独立执行线程池，worker 调度线程可继续领取其他 Run。worker 先预留执行名额再领取任务，执行线程池不保留等待队列；没有容量时任务仍为 `PENDING`，不提前占用租约或 attempt。执行前再次用 owner、attempt、version 和有效租约围栏任务；同一 worker 会跳过已派发的 fence、派发被拒绝且仍在退避窗口的 fence，但仍能恢复重启任务或派发被回收后的新 attempt。新增 `LeaseWatchdogService`，独立定时轮询并按配置批量回收过期租约，即使 fake worker 被关闭仍保持运行；新增 `LEASE_WATCHDOG_ENABLED`、`LEASE_WATCHDOG_POLL_DELAY_MS`、`LEASE_WATCHDOG_BATCH_SIZE`、`FAKE_WORKER_EXECUTION_CONCURRENCY` 与 `FAKE_WORKER_DISPATCH_RETRY_DELAY_MS` 配置。`RuntimeStore` 禁止已过期租约再次进入执行器；失败回收继续与事件同事务提交。新增真实定时调度并发、阻塞执行器、租约在执行前过期、watchdog 批量回收、关闭 worker 后 watchdog 仍运行、无执行容量时保持 PENDING、过期任务不重复执行、执行池拒绝退避，以及结果事件写入失败回滚测试，并更新重启 / 重试回归。未新增数据库迁移。 |
+| 未完成 / 边界 | B06 范围已完成。事件回滚、结果提交数据库故障、租约过期后的迟到结果、过期任务不重复执行、真实单实例调度并发推进和执行前租约复核已由测试覆盖；数据库集成运行在独立 PostgreSQL 中，未做断库 / 网络故障演练。执行器外部副作用不保证“恰好一次”；心跳续租、截止时间 / 超时及其他后续能力留待 B07、B08。未执行新的 GitHub Actions 平台验收。 |
+| 下一步 | 停止在 B06；后续需用户明确开始 B07 后再继续。 |
 
 ## 完成记录
 
@@ -160,3 +152,4 @@
 - **B02**（2026-10-23，`73cf9d1`）：独立 PostgreSQL 验收 41 项通过，失败 / 错误 / 跳过均为 0，其中数据库集成 29 项实际执行；覆盖真实 HTTP / 事件、重试、并发与回滚，以及合约正反例和可选字段演进。镜像构建通过，构建内另有 23 项数据库测试因未配置测试库被跳过，不替代上述独立验收。合约检查限于响应 JSON Schema、状态码和媒体类型，未做完整 OpenAPI lint 或真实模型 / 下游联调；未修改迁移。
 - **B03**（2026-10-24，`e089e8e`）：独立 PostgreSQL `verify` 验收 41 项通过，失败 / 错误 / 跳过均为 0，其中数据库集成 29 项实际执行；报告检查器 12 项回归通过，故意破坏状态机 / 合约或移除测试库配置均能阻止 CI 变绿。用户确认 GitHub Actions 自动测试、JAR 打包、报告检查和上传均通过。附件包含日志与测试报告，不包含 JAR 本体。
 - **B04**（2026-10-25，`87a599d`）：完成 [ADR 0005](adr/0005-cancellation-foundation.md)、CANCELLED 状态、V4 迁移与版本化合约基础；独立 PostgreSQL `verify` 验收 10 个测试类共 53 项通过，失败 / 错误 / 跳过均为 0，其中数据库集成测试 32 项实际执行；报告检查、JAR 打包及 Python 检查器回归 12 项通过，测试容器和网络已清理。取消接口、原子取消、实际取消事件写入、重复取消及真实取消并发竞争尚未实现 / 验证，留待 B05；长事务拆分、心跳续租分别留待 B06、B07。
+- **B06**（2026-10-29，基线 `226b67d`）：执行器调用移出长事务，领取 / 执行 / 提交结果使用短事务；worker 调度与执行线程池分离，执行前复核租约，watchdog 独立定时线程并分批回收；执行池拒绝时对原 fence 退避，且任务必须等到取得执行名额后才开始租约；关闭 fake worker 后 watchdog 仍工作。增加单实例调度并发、无执行容量时任务仍为 PENDING、watchdog 独立于 worker 开关、过期执行前不调用执行器、执行池拒绝退避和结果事件故障回滚验证。独立 PostgreSQL 验收 11 个测试类共 92 项通过，失败 / 错误 / 跳过均为 0，报告检查和 JAR 打包通过。未新增数据库迁移；心跳续租留待 B07。

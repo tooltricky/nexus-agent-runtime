@@ -83,8 +83,13 @@ are covered. Database triggers reject either cancellation event to verify full
 rollback, including leases and the first event. A rolled-back cancellation does
 not defeat a subsequently committed terminal operation.
 
-Executor calls still run inside the worker transaction: cancellation may wait
-for its Task lock and return 409 if completion commits first. B06 will address
-long transactions. There is no heartbeat renewal endpoint yet; B07 will enforce
-cancellation checks there as well. Neither immediate interruption nor reversal
-of external side effects is promised.
+The B06 worker transaction boundary is now deliberately short. Claiming a Task,
+marking it `EXECUTING`, and committing its result each use separate transactions;
+the executor call runs on a worker execution thread without holding the Task row
+lock. A worker rechecks the owner, attempt, version, and live lease immediately
+before starting the executor. Cancellation can therefore commit while an
+executor is running; an already-started external operation is not interrupted,
+and its late result is fenced out if the Task was cancelled or reclaimed. There
+is no heartbeat renewal endpoint yet; B07 will define renewal and its
+cancellation checks. Neither immediate interruption nor reversal of external
+side effects is promised.
