@@ -29,29 +29,31 @@ public class WorkerTransactionService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Optional<TaskRecord> nextTask(String workerId, Duration leaseDuration) {
-        return nextTask(workerId, leaseDuration, Set.of());
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Optional<TaskRecord> nextTask(String workerId, Duration leaseDuration, Set<TaskFence> inFlight) {
+    public Optional<TaskSelection> nextTask(String workerId, Duration leaseDuration, Set<TaskFence> inFlight) {
         Optional<TaskRecord> owned = store.findOwnedActiveTaskForUpdate(workerId, inFlight);
         if (owned.isPresent()) {
-            return owned;
+            return owned.map(task -> new TaskSelection(task, false));
         }
         Optional<TaskClaim> claim = store.claimNextTask(workerId, leaseDuration);
         claim.ifPresent(this::recordLease);
         // Claiming, entering execution, and execution remain separate polls and short transactions.
-        return Optional.empty();
+        return claim.map(selected -> new TaskSelection(selected.task(), true));
+    }
+
+    public record TaskSelection(TaskRecord task, boolean newlyClaimed) { }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Optional<TaskRecord> markExecuting(TaskRecord task, String workerId) {
+        if (!store.tryTransitionTaskOwned(task, TaskStatus.EXECUTING, null, workerId)) {
+            return Optional.empty();
+        }
+        appendTaskTransition(task, TaskStatus.EXECUTING, "TaskExecuting");
+        return store.findTasks(task.runId()).stream().filter(updated -> updated.id().equals(task.id())).findFirst();
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public boolean markExecuting(TaskRecord task, String workerId) {
-        if (!store.tryTransitionTaskOwned(task, TaskStatus.EXECUTING, null, workerId)) {
-            return false;
-        }
-        appendTaskTransition(task, TaskStatus.EXECUTING, "TaskExecuting");
-        return true;
+    public boolean renewLease(TaskRecord task, String workerId, Duration leaseDuration) {
+        return store.renewTaskLease(task, workerId, leaseDuration);
     }
 
     /** Rechecks the lease immediately before an executor call starts. */

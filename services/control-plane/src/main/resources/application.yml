@@ -31,6 +31,7 @@ nexus:
     enabled: ${FAKE_WORKER_ENABLED:true}
     poll-delay-ms: ${FAKE_WORKER_POLL_DELAY_MS:200}
     lease-duration-ms: ${FAKE_WORKER_LEASE_DURATION_MS:30000}
+    heartbeat-interval-ms: ${FAKE_WORKER_HEARTBEAT_INTERVAL_MS:10000}
     execution-concurrency: ${FAKE_WORKER_EXECUTION_CONCURRENCY:16}
     watchdog-poll-delay-ms: ${LEASE_WATCHDOG_POLL_DELAY_MS:1000}
     watchdog-batch-size: ${LEASE_WATCHDOG_BATCH_SIZE:50}

@@ -22,6 +22,9 @@ REQUIRED_SUITES = (
     "io.nexus.controlplane.service.RuntimePersistenceIntegrationTest",
     "io.nexus.controlplane.service.RuntimeRestartIntegrationTest",
     "io.nexus.controlplane.service.TaskRetryIntegrationTest",
+    "io.nexus.controlplane.service.WorkerLeaseConfigurationTest",
+    "io.nexus.controlplane.service.LeaseHeartbeatIntegrationTest",
+    "io.nexus.controlplane.service.LeaseHeartbeatSchedulingIntegrationTest",
 )
 COUNTS = ("tests", "failures", "errors", "skipped")
 

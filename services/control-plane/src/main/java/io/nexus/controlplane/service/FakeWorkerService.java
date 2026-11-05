@@ -29,9 +29,21 @@ public class FakeWorkerService {
     private final TaskExecutor executor;
     private final Executor executionExecutor;
     private final long dispatchRetryDelayMs;
+    private final LeaseHeartbeatService heartbeats;
     private volatile Instant dispatchRetryAt = Instant.MIN;
     private final Object selectionLock = new Object();
     private final Set<ExecutionKey> inFlight = new HashSet<>();
+
+    public FakeWorkerService(
+            WorkerTransactionService workerTransactions,
+            TaskFailureService failures,
+            TaskExecutor executor,
+            @Qualifier("workerExecutionExecutor") Executor executionExecutor,
+            long leaseDurationMs,
+            long dispatchRetryDelayMs
+    ) {
+        this(workerTransactions, failures, executor, executionExecutor, leaseDurationMs, dispatchRetryDelayMs, null);
+    }
 
     @Autowired
     public FakeWorkerService(
@@ -39,8 +51,18 @@ public class FakeWorkerService {
             TaskFailureService failures,
             TaskExecutor executor,
             @Qualifier("workerExecutionExecutor") Executor executionExecutor,
-            @Value("${nexus.worker.lease-duration-ms:30000}") long leaseDurationMs,
-            @Value("${nexus.worker.dispatch-retry-delay-ms:200}") long dispatchRetryDelayMs
+            WorkerLeaseConfiguration configuration,
+            @Value("${nexus.worker.dispatch-retry-delay-ms:200}") long dispatchRetryDelayMs,
+            LeaseHeartbeatService heartbeats
+    ) {
+        this(workerTransactions, failures, executor, executionExecutor, configuration.leaseDurationMs(),
+                dispatchRetryDelayMs, heartbeats);
+    }
+
+    public FakeWorkerService(
+            WorkerTransactionService workerTransactions, TaskFailureService failures, TaskExecutor executor,
+            Executor executionExecutor, long leaseDurationMs, long dispatchRetryDelayMs,
+            LeaseHeartbeatService heartbeats
     ) {
         this.workerTransactions = workerTransactions;
         this.leaseDurationMs = leaseDurationMs;
@@ -48,6 +70,7 @@ public class FakeWorkerService {
         this.executor = executor;
         this.executionExecutor = executionExecutor;
         this.dispatchRetryDelayMs = dispatchRetryDelayMs;
+        this.heartbeats = heartbeats;
     }
 
     /** Synchronous constructor retained for deterministic service-level tests. */
@@ -96,9 +119,17 @@ public class FakeWorkerService {
             if (selected.isEmpty()) {
                 return;
             }
-            task = selected.get();
+            task = selected.get().task();
+            if (selected.get().newlyClaimed()) {
+                track(task);
+                return;
+            }
             if (task.status() == TaskStatus.LEASED) {
-                workerTransactions.markExecuting(task, workerId);
+                try {
+                    workerTransactions.markExecuting(task, workerId).ifPresent(this::track);
+                } finally {
+                    stopHeartbeat(task);
+                }
                 return;
             }
             if (task.status() != TaskStatus.EXECUTING) {
@@ -108,6 +139,7 @@ public class FakeWorkerService {
             if (!inFlight.add(key)) {
                 return;
             }
+            track(task);
         }
         try {
             if (!workerTransactions.hasLiveExecutingLease(task, workerId)) {
@@ -122,10 +154,19 @@ public class FakeWorkerService {
             }
             workerTransactions.completeSuccessfully(task, workerId, output);
         } finally {
+            stopHeartbeat(task);
             synchronized (selectionLock) {
                 inFlight.remove(key);
             }
         }
+    }
+
+    private void track(TaskRecord task) {
+        if (heartbeats != null) heartbeats.track(task, workerId, Duration.ofMillis(leaseDurationMs));
+    }
+
+    private void stopHeartbeat(TaskRecord task) {
+        if (heartbeats != null) heartbeats.stop(task, workerId);
     }
 
     private record ExecutionKey(String taskId, int attempt, long version) {

@@ -10,6 +10,8 @@ import io.nexus.controlplane.domain.Records.TaskRecord;
 import io.nexus.controlplane.domain.RunStatus;
 import io.nexus.controlplane.domain.TaskStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.UncategorizedSQLException;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
@@ -171,6 +173,34 @@ public class RuntimeStore {
                 )
                 """, Boolean.class, task.id(), task.version(), task.attempt(), leaseOwner);
         return Boolean.TRUE.equals(exists);
+    }
+
+    /** Never wait for a Task row: lock contention must not stall the shared heartbeat sweep. */
+    public boolean renewTaskLease(TaskRecord task, String leaseOwner, Duration leaseDuration) {
+        long millis = leaseDuration.toMillis();
+        if (millis <= 0) throw new IllegalArgumentException("Lease duration must be positive");
+        // NOWAIT raises a transient lock exception, distinct from an absent/stale Task (false).
+        // The caller retains the heartbeat registration and retries in the next sweep.
+        try {
+            if (jdbc.queryForList("SELECT id FROM tasks WHERE id = ? FOR UPDATE NOWAIT", String.class, task.id()).isEmpty()) {
+                return false;
+            }
+        } catch (UncategorizedSQLException failure) {
+            // Spring's default SQL-state translator does not classify PostgreSQL lock_not_available.
+            if ("55P03".equals(failure.getSQLException().getSQLState())) {
+                throw new CannotAcquireLockException("Task lease row is busy", failure);
+            }
+            throw failure;
+        }
+        return jdbc.update("""
+                UPDATE tasks
+                SET lease_expires_at = GREATEST(lease_expires_at,
+                        clock_timestamp() + (? * INTERVAL '1 millisecond')),
+                    updated_at = clock_timestamp()
+                WHERE id = ? AND status IN ('LEASED', 'EXECUTING')
+                  AND version = ? AND attempt = ? AND lease_owner = ?
+                  AND lease_expires_at > clock_timestamp()
+                """, millis, task.id(), task.version(), task.attempt(), leaseOwner) == 1;
     }
 
     public void transitionRun(RunRecord run, RunStatus next, JsonNode output) {

@@ -8,6 +8,7 @@ Nexus Agent Runtime 的可运行纵向切片：创建 Session 和幂等 Run，�
 - PostgreSQL 持久化和 Flyway 迁移
 - Run 与 Task 显式状态机及原子取消接口、重复取消与迟到结果防护
 - 基于真实 Task Lease 的数据库任务领取和可重启 fake worker
+- 独立心跳续租与租约 / 心跳配置的启动校验
 - 持久化 `RETRYING`、指数退避和 Task/Run 原子失败
 - append-only `domain_events` 时间线
 - OpenAPI 3.1 / JSON Schema 2020-12 合约及真实 HTTP / 事件自动验证
@@ -120,7 +121,7 @@ curl -i -X POST http://localhost:8080/v1/runs/<run_id>/cancel
 执行器调用不持有 Task 行锁的数据库事务：领取、进入执行和提交结果分别使用短事务，执行器
 运行期间其他 Run 和 watchdog 仍可推进。提交结果会校验 owner、attempt、version 和有效租约，
 因此租约过期后旧执行者的迟到结果会被拒绝。取消不撤销已发生的外部操作，也不保证立即中断
-外部调用。心跳续租属于 B07，本任务尚未提供该能力。fake worker 通常很快完成，演示中取消已
+外部调用。B07 已增加独立心跳续租，规则见下文。fake worker 通常很快完成，演示中取消已
 完成的 Run 得到 `409` 属于正常结果；自动测试通过受控执行器和数据库同步覆盖各取消阶段。
 
 worker 和 lease watchdog 使用两个独立的定时线程；worker 领取后把执行工作提交到独立的
@@ -141,6 +142,35 @@ B05 复用 B04 的 V4 迁移，无新增迁移，V1–V4 未改动；历史事�
 Run / timeline 成功查询及取消成功响应带 `Nexus-API-Contract: 0.2`。旧 HTTP 定义保存在
 `packages/contracts/openapi-v0.1.yaml`，实际取消事件带 `schema_version: "0.2"`，其他既有事件
 仍省略版本。启用取消前，客户端须先支持 CANCELLED 和混合版本事件。
+
+## 心跳续租（B07）
+
+worker 从领取任务后开始跟踪租约，进入执行时换用最新的状态版本，直到结果提交结束。
+独立心跳线程定期延长有效租约，所以执行器工作超过最初的 30 秒时仍有机会正常提交结果。
+心跳不占用执行线程池，也不使用 worker 或 watchdog 的定时线程；任务完成后清理注册，
+取消或失去租约后下一次心跳被拒绝并清理，应用关闭时清理注册和心跳调度资源。
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `FAKE_WORKER_LEASE_DURATION_MS` | `30000` | 领取及续租时使用的租约时长，单位毫秒 |
+| `FAKE_WORKER_HEARTBEAT_INTERVAL_MS` | `10000` | 心跳轮询间隔，单位毫秒 |
+
+对应 Spring 配置为 `nexus.worker.lease-duration-ms` 和 `nexus.worker.heartbeat-interval-ms`。
+两个值必须为正，心跳间隔必须小于租约时长，否则应用启动失败并指出原因；关闭 worker 时
+仍执行配置校验。修改时应为调度和数据库延迟留出余量，例如 30 秒租约配合 10 秒心跳。
+环境变量须传入 control-plane 容器；在宿主机设置变量并不会自动注入现有 Compose 服务。
+
+续租在独立短事务中用 `FOR UPDATE NOWAIT` 尝试锁定 Task，再按数据库当前时间检查 owner、
+attempt、version、活动状态及未过期租约。遇到行锁立即跳过本轮，保留注册下轮重试，使其他任务
+仍能续租；锁释放后如果已经过期，也不能续回来。心跳只延长租约并更新 `updated_at`，
+不增加 attempt 或状态版本，不追加领域事件；原 `TaskLeased` 事件保留领取时的到期时间，
+查询 Task 的 `lease_expires_at` 可看到当前到期时间。结果提交仍使用原有版本和有效租约检查。
+
+心跳遇到数据库故障时记录任务标识并留待下一轮尝试，不将其记成模型失败；下一轮如果已经
+过期，续租仍会被拒绝。停止心跳后，watchdog 按原有退避和次数限制回收任务；新 attempt
+接管后，旧心跳和迟到的成功 / 失败报告均无效。取消、完成与续租竞争也不会让终态任务复活。
+心跳代表 worker 仍持有任务，不代表下游调用有进展；执行器一直卡住但心跳正常时会持续续租。
+截止时间 / TIMEOUT 留待 B08。实现规则见 [ADR 0006](docs/adr/0006-lease-heartbeats.md)。
 
 ## 测试
 
@@ -178,6 +208,10 @@ docker compose -f deploy/docker-compose.test.yml down
   重试、watchdog 按两种先后顺序使用独立事务竞争；首个事务持锁时观察第二个事务确已等待或
   通过 SKIP LOCKED 跳过，再放行提交。数据库触发器注入第一 / 第二条取消事件写入失败，
   验证状态、租约和事件一起回滚；已回滚的取消不算竞争获胜。
+- 真实独立心跳调度支持超过初始租约的执行；停止心跳后接管、阻塞执行中取消、续租资格与版本
+  校验、续租与完成 / 失败 / 取消 / watchdog 的竞争、单个任务持锁时其他任务持续续租、
+  行锁释放后过期任务不能补续、数据库故障回滚、
+  注册替换与清理，以及非法租约 / 心跳配置启动失败。
 
 HTTP 回归测试为避免后台调度干扰并发创建断言，禁用定时 worker，通过独立事务主动推进真实 fake worker；
 重启测试另行启用真实定时 worker 验证自动执行。租约和退避测试直接调整独立测试库的时间字段，避免长时间等待。
@@ -210,7 +244,7 @@ Docker 构建上下文也使用仓库根目录。
 集成测试仍串行运行，避免共享清表互相干扰。
 
 每次 CI 使用新 runner 的工作区，不复用旧测试报告。Maven 返回成功后仍要检查 Surefire XML：
-所有 11 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
+所有 14 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
 不一致的计数或损坏内容都会使 CI 失败。新增或重命名测试类时，同步维护
 `scripts/check-test-reports.py` 的 `REQUIRED_SUITES`；发现的其他测试类也接受同样检查。
 所以即使漏配 `TEST_DB_URL` 导致 Maven 跳过集成测试，整次 CI 也不会显示成功。
@@ -253,4 +287,5 @@ nexus-agent-runtime/
 架构取舍见 [ADR 0001](docs/adr/0001-mvp-vertical-slice.md)、
 [ADR 0002](docs/adr/0002-task-lease.md)、[ADR 0003](docs/adr/0003-task-failure-and-retry.md)
 、[ADR 0004](docs/adr/0004-contract-validation.md)
-和 [ADR 0005](docs/adr/0005-cancellation-foundation.md)。
+、[ADR 0005](docs/adr/0005-cancellation-foundation.md)
+和 [ADR 0006](docs/adr/0006-lease-heartbeats.md)。

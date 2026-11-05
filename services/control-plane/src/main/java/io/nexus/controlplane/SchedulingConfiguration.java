@@ -20,6 +20,11 @@ public class SchedulingConfiguration {
         return scheduler("nexus-watchdog-");
     }
 
+    @Bean(name = "heartbeatTaskScheduler", destroyMethod = "shutdown")
+    public ThreadPoolTaskScheduler heartbeatTaskScheduler() {
+        return scheduler("nexus-heartbeat-");
+    }
+
     @Bean(name = "workerExecutionExecutor", destroyMethod = "shutdown")
     public Executor workerExecutionExecutor(
             @Value("${nexus.worker.execution-concurrency:16}") int executionConcurrency
