@@ -44,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /** All destructive fixtures run only against the explicitly supplied disposable database. */
 @EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
-        "nexus.worker.enabled=false",
+        "nexus.timeout.enabled=false", "nexus.worker.enabled=false",
         "nexus.watchdog.enabled=false",
         "nexus.worker.retry-initial-delay-ms=60000",
         "nexus.worker.retry-max-delay-ms=240000",
@@ -407,7 +407,7 @@ class RunCancellationIntegrationTest {
     }
 
     private static TaskRecord withFence(TaskRecord t, int attempt, long version) {
-        return new TaskRecord(t.id(), t.runId(), t.name(), t.status(), t.input(), t.output(), t.leaseOwner(),
+        return new TaskRecord(t.id(), t.runId(), t.name(), t.deadlineAt(), t.status(), t.input(), t.output(), t.leaseOwner(),
                 t.leaseExpiresAt(), attempt, t.maxAttempts(), t.nextAttemptAt(), version, t.createdAt(), t.updatedAt());
     }
 

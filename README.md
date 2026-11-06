@@ -9,6 +9,7 @@ Nexus Agent Runtime 的可运行纵向切片：创建 Session 和幂等 Run，�
 - Run 与 Task 显式状态机及原子取消接口、重复取消与迟到结果防护
 - 基于真实 Task Lease 的数据库任务领取和可重启 fake worker
 - 独立心跳续租与租约 / 心跳配置的启动校验
+- 持久化截止时间、原子 TIMEOUT、独立超时扫描与协作式执行中断
 - 持久化 `RETRYING`、指数退避和 Task/Run 原子失败
 - append-only `domain_events` 时间线
 - OpenAPI 3.1 / JSON Schema 2020-12 合约及真实 HTTP / 事件自动验证
@@ -110,13 +111,13 @@ curl -i -X POST http://localhost:8080/v1/runs/<run_id>/cancel
 无需请求体或 `Idempotency-Key`，请求体不参与处理。排队、已领取、执行中和等待重试的工作
 均可取消。成功返回 `200` 和当前 Run，Run 与 Task 都为 `CANCELLED`；租约清空，输出省略，
 尝试次数、重试时间与历史记录保留。已取消时重复请求同样返回 `200`，不改变版本、时间或追加事件。
-不存在的 Run 返回 `404 {code: not_found, ...}`；已成功 / 失败的 Run 返回
+不存在的 Run 返回 `404 {code: not_found, ...}`；已成功 / 失败 / 超时的 Run 返回
 `409 {code: cancellation_conflict, ...}`，保留原状态和结果。
 
 取消在同一数据库事务中保存状态并依次追加 `TaskCancelled -> RunCancelled`，事件写入失败则
 全部回滚。取消与成功、最终失败竞争时，先有效提交的终态事务获胜；已提交的重试仍可取消。
 取消后 worker 不能再领取或回收该 Task，旧 owner、旧 attempt 或旧版本提交的迟到结果均无效。
-成功、失败、取消都是不可逆终态，规则见 [ADR 0005](docs/adr/0005-cancellation-foundation.md)。
+成功、失败、取消、超时都是不可逆终态，规则见 [ADR 0005](docs/adr/0005-cancellation-foundation.md)。
 
 执行器调用不持有 Task 行锁的数据库事务：领取、进入执行和提交结果分别使用短事务，执行器
 运行期间其他 Run 和 watchdog 仍可推进。提交结果会校验 owner、attempt、version 和有效租约，
@@ -139,7 +140,7 @@ worker 会先预留执行名额再领取任务，执行线程池不保留等待�
 再次进入执行器，必须先由 watchdog 回收。
 
 B05 复用 B04 的 V4 迁移，无新增迁移，V1–V4 未改动；历史事件不回填 schema_version。
-Run / timeline 成功查询及取消成功响应带 `Nexus-API-Contract: 0.2`。旧 HTTP 定义保存在
+Run / timeline 成功查询及取消成功响应在 B08 后带 `Nexus-API-Contract: 0.3`。旧 HTTP 定义保存在
 `packages/contracts/openapi-v0.1.yaml`，实际取消事件带 `schema_version: "0.2"`，其他既有事件
 仍省略版本。启用取消前，客户端须先支持 CANCELLED 和混合版本事件。
 
@@ -170,7 +171,61 @@ attempt、version、活动状态及未过期租约。遇到行锁立即跳过本
 过期，续租仍会被拒绝。停止心跳后，watchdog 按原有退避和次数限制回收任务；新 attempt
 接管后，旧心跳和迟到的成功 / 失败报告均无效。取消、完成与续租竞争也不会让终态任务复活。
 心跳代表 worker 仍持有任务，不代表下游调用有进展；执行器一直卡住但心跳正常时会持续续租。
-截止时间 / TIMEOUT 留待 B08。实现规则见 [ADR 0006](docs/adr/0006-lease-heartbeats.md)。
+B08 已增加截止时间 / TIMEOUT，规则见下文。心跳实现规则见 [ADR 0006](docs/adr/0006-lease-heartbeats.md)。
+
+## 截止时间与超时（B08）
+
+创建 Run 时可选传 `deadline_at`，例如：
+
+```json
+{
+  "session_id": "<session_id>",
+  "input": "分析订单服务错误率",
+  "deadline_at": "2026-12-01T12:00:00+08:00"
+}
+```
+
+请替换成实际的未来时间。必须是带时区偏移、包含秒的时间字符串，最多九位小数秒；支持 `Z` 及 RFC 3339 的 `-23:59` 至 `+23:59` 偏移（分钟须为 00–59）。数字时间戳、不带时区、格式错误
+或首次创建时已经到期会返回 `400 invalid_request`。省略或传 `null` 表示不设期限，旧数据
+也保持无期限；查询响应在无期限时省略此字段。UTC 与其他偏移表示的同一时刻视为相同输入，
+精度统一截断到微秒。当前 Run 与唯一 Task 共用同一个截止时间，查询两者均可看到该值。
+年份 0001–9999 限制针对输入的本地日期；偏移换算后的 UTC 年份可以跨入 0000 或 10000。
+数据库仍保存同一绝对时刻，这两种边界的查询和事件期限使用 `+23:59` / `-23:59` 表示，保持 RFC 3339 的四位年份。
+
+排队、执行和等待重试都计入期限，重启不会重新计时。同键、同输入及同一规范化截止时间的
+重放仍返回原 `run_id`，即使期限已经过去；同键修改期限返回 `409 idempotency_conflict`。
+有剩余尝试但退避将跨过截止时间时，Task 进入不可领取的 RETRYING 等待状态，
+`next_attempt_at` 等于截止时间，记录 `TaskRetrySkipped`，到期才标记超时。
+未来审批等待也将继续计时；审批本身尚未实现。
+
+到期后，任务不能再领取、进入执行、续租、重试或提交结果，心跳也不能把租约延长到期限之后。
+独立扫描器将未完成 Run / Task 一起改为 `TIMEOUT`，清除租约和输出，并原子记录
+`TaskTimedOut → RunTimedOut`；重复扫描不重复记录。扫描可能因轮询或行锁稍晚更新可见状态，
+但执行入口始终按数据库当前时间拒绝过期操作。扫描不占用执行线程池，worker 关闭时仍可运行。
+
+| 环境变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `DEADLINE_WATCHDOG_ENABLED` | `true` | 是否运行超时扫描；关闭后入口仍拒绝过期操作，但无人扫描时可见状态可能停留在活动状态 |
+| `DEADLINE_WATCHDOG_POLL_DELAY_MS` | `1000` | 超时写入扫描与本机执行停止检查的间隔，毫秒；对应 `nexus.timeout.poll-delay-ms`，必须为正 |
+| `DEADLINE_WATCHDOG_BATCH_SIZE` | `50` | 每轮超时写入上限及每批本机执行停止查询上限；对应 `nexus.timeout.batch-size`，必须为正 |
+
+容器环境变量需实际传给 control-plane；宿主机设置不会自动注入已运行容器。
+超时与取消、成功、失败按锁定后的有效检查决定：截止前已作出的有效终态决定可以提交，
+之后超时不覆盖它；截止后仍未结束的工作必须超时。取消若发现到期，会先保存 TIMEOUT，
+再返回 `409 cancellation_conflict`；已有 TIMEOUT 同样返回 409。已取消 Run 的重复取消仍是 200。
+
+超时事务提交成功后，系统向本进程同一 Task 的当前及所有仍在运行的旧 attempt 发送停止信号、线程中断并清理心跳。
+因此，租约过期并被新 attempt 接管后，旧执行器也会收到超时通知；迟到的旧 attempt 通知不会影响更新的 attempt 或其他 Task。
+每个实例还会分批检查本机仍在执行的 Task 是否已在数据库中提交为 TIMEOUT，所以其他实例处理超时后，执行实例也会补发停止通知。
+此检查不依赖心跳注册，即使本机关闭超时写入扫描仍会运行；不会因尚未提交或已回滚的超时而中断执行，数据库暂不可用时保留注册、下轮再查。
+`TaskExecutor` 可在步骤之间检查信号；响应中断的执行器退出后释放执行名额。不响应中断的
+执行器可能继续占用线程，其迟到结果仍被拒绝。不能保证立即停止已发出的外部请求或撤销
+已发生的副作用。具体事务判定点、中断和重试规则见 [ADR 0007](docs/adr/0007-execution-deadlines.md)。
+
+B08 使用 V5 升级，V1–V4 不变，历史事件不回填。HTTP Run / timeline / cancel 成功响应使用
+`Nexus-API-Contract: 0.3`，冻结的 0.2 定义保存在 `packages/contracts/openapi-v0.2.yaml`；
+新超时和跳过重试事件使用 `schema_version: "0.3"`，取消事件仍为 0.2，既有事件仍无版本。
+部署写入端前，客户端须支持 TIMEOUT 和三种事件版本。
 
 ## 测试
 
@@ -213,6 +268,12 @@ docker compose -f deploy/docker-compose.test.yml down
   行锁释放后过期任务不能补续、数据库故障回滚、
   注册替换与清理，以及非法租约 / 心跳配置启动失败。
 
+B08 另覆盖四个阶段超时、独立扫描、退避跨截止时间、数据库入口拒绝过期操作、续租上限、
+超时与终态竞争、事件写入故障回滚、V4 → V5 升级和旧事件保留、期限输入 / 幂等重放、
+完整应用重启、执行池满时排队超时，以及响应 / 忽略中断的受控执行器。审查回归还覆盖租约接管后同时中断新旧 attempt、释放两个执行名额，以及完整 RFC 3339 偏移范围的 HTTP 规范化与幂等重放。
+另用两个独立应用上下文共享测试数据库，验证其他实例提交超时后的本机停止、移除心跳后仍能停止、回滚不误中断及执行名额复用。
+HTTP 偏移正例按数据库当前时间生成未来期限；年份边界另验证 UTC 跨界、持久化和查询表示。
+
 HTTP 回归测试为避免后台调度干扰并发创建断言，禁用定时 worker，通过独立事务主动推进真实 fake worker；
 重启测试另行启用真实定时 worker 验证自动执行。租约和退避测试直接调整独立测试库的时间字段，避免长时间等待。
 共享清表和有超时的并发同步辅助代码位于 `src/test/java/io/nexus/controlplane/support/RuntimeTestSupport.java`。
@@ -244,7 +305,7 @@ Docker 构建上下文也使用仓库根目录。
 集成测试仍串行运行，避免共享清表互相干扰。
 
 每次 CI 使用新 runner 的工作区，不复用旧测试报告。Maven 返回成功后仍要检查 Surefire XML：
-所有 14 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
+所有 20 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
 不一致的计数或损坏内容都会使 CI 失败。新增或重命名测试类时，同步维护
 `scripts/check-test-reports.py` 的 `REQUIRED_SUITES`；发现的其他测试类也接受同样检查。
 所以即使漏配 `TEST_DB_URL` 导致 Maven 跳过集成测试，整次 CI 也不会显示成功。
@@ -288,4 +349,5 @@ nexus-agent-runtime/
 [ADR 0002](docs/adr/0002-task-lease.md)、[ADR 0003](docs/adr/0003-task-failure-and-retry.md)
 、[ADR 0004](docs/adr/0004-contract-validation.md)
 、[ADR 0005](docs/adr/0005-cancellation-foundation.md)
-和 [ADR 0006](docs/adr/0006-lease-heartbeats.md)。
+、[ADR 0006](docs/adr/0006-lease-heartbeats.md)
+和 [ADR 0007](docs/adr/0007-execution-deadlines.md)。

@@ -154,7 +154,7 @@ class RuntimeRestartIntegrationTest {
     }
 
     private void start(boolean workerEnabled, boolean watchdogEnabled) {
-        application = new SpringApplicationBuilder(ControlPlaneApplication.class).web(WebApplicationType.NONE).run(
+        application = new SpringApplicationBuilder(ControlPlaneApplication.class).web(WebApplicationType.NONE).run("--nexus.timeout.enabled=false",
                 "--spring.datasource.url=" + System.getenv("TEST_DB_URL"),
                 "--spring.datasource.username=" + System.getenv().getOrDefault("TEST_DB_USERNAME", "nexus"),
                 "--spring.datasource.password=" + System.getenv().getOrDefault("TEST_DB_PASSWORD", "nexus"),

@@ -1,7 +1,7 @@
 # HTTP 与领域事件合约
 
 `openapi.yaml` 使用 OpenAPI 3.1（Schema Object 为 JSON Schema 2020-12）。当前 HTTP 合约版本为
-`0.2.0`；`openapi-v0.1.yaml` 和 `events/domain-event.schema.json` 保留旧版定义。
+`0.3.0`；`openapi-v0.1.yaml`、`openapi-v0.2.yaml` 和对应事件 Schema 保留旧版定义。
 
 创建 Run 的 `session_id` / `input` 必须是非空白字符串；空白按当前 Bean Validation 的
 `String.trim()` 语义判断（U+0000–U+0020），内容不做 trim。`Idempotency-Key` 必须提供，
@@ -54,3 +54,27 @@ Task 的 PENDING / LEASED / EXECUTING / RETRYING 可以进入 CANCELLED；终态
 和 POST cancel 带 `Nexus-API-Contract: 0.2`，不提供旧版响应协商。样本位于 `examples/`；
 取消成功响应要求 Run 与唯一 Task 均为 CANCELLED；取消冲突与幂等冲突使用不同的错误 Schema。
 取消可能等待正在执行的事务，不保证立即中断外部调用或撤销外部副作用。当前尚无心跳续租接口。
+
+## B08：截止时间、TIMEOUT 与 0.3 版本
+
+当前成功 Run / timeline GET 及 cancel POST 响应带 `Nexus-API-Contract: 0.3`。
+上述 B04 / B05 段落描述其历史 0.2 边界；冻结文件保留原样，不协商旧响应版本。
+
+创建请求新增可选 `deadline_at`：带时区偏移、包含秒且最多九位小数秒的时间字符串，支持 `Z` 及 `-23:59` 至 `+23:59` 的 RFC 3339 偏移（分钟 00–59）。省略或 null 表示无限期；查询在
+无期限时省略字段。规范化 UTC 并截断为微秒后参与幂等比较；相同绝对时刻不同偏移相等。
+0001–9999 限制输入的本地年份，允许偏移换算后跨入 UTC 年份 0000 / 10000；这类边界的响应及事件期限以 `+23:59` / `-23:59` 表示，保持四位本地年份，其余仍输出 UTC。
+首次创建拒绝已到期输入，重放同键同请求即使到期也返回原 Run，不重新计算期限。
+TIMEOUT 的 Run / Task 必须提供 deadline_at，且不提供 output、lease_owner 或 lease_expires_at。
+取消超时 Run 返回 409 cancellation_conflict；取消入口首次发现到期时先提交超时再返回 409。
+
+无 schema_version 使用冻结 0.1，字符串 0.2 使用冻结取消 Schema，字符串 0.3 使用
+`events/domain-event-v0.3.schema.json`。新版本只用于 TaskTimedOut、RunTimedOut 和
+TaskRetrySkipped；未知、null、数字版本均拒绝，历史事件不改写。前两者原因是
+DEADLINE_EXCEEDED，带截止时间及原 / 目标状态，Task 事件还带 attempt / max_attempts，
+Run 事件带关联 task_id。TaskRetrySkipped 原因是 DEADLINE_BEFORE_RETRY，表示释放租约后
+在 RETRYING 等到期限，不是发起重试，next_attempt_at 等于 deadline_at。
+
+样本为 `examples/run-timeout-v0.3.json`、`examples/events-timeout-v0.3.json`，由
+DeadlineContractTest 和真实 HTTP / PostgreSQL 测试校验，并保留旧样本回归。
+校验器保留 date-time format assertion，单独校验完整 RFC 3339 偏移并用原库校验日历与本地时间，避免测试库内部 `OffsetDateTime` 的 ±18 小时限制缩窄公开范围；覆盖 `±19:00`、`±23:59` 正例及小时 24 / 分钟 60 反例。
+事务优先级、审批等待计时及中断边界见 [ADR 0007](../../docs/adr/0007-execution-deadlines.md)。

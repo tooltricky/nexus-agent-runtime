@@ -52,6 +52,10 @@ public class LeaseHeartbeatService {
         });
     }
 
+    public void stopAttemptsThrough(String taskId, int attempt) {
+        active.keySet().removeIf(key -> key.taskId().equals(taskId) && key.attempt() <= attempt);
+    }
+
     @PreDestroy
     public synchronized void close() {
         closed = true;

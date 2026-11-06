@@ -11,17 +11,23 @@ public enum TaskStatus {
     RETRYING,
     SUCCEEDED,
     FAILED,
-    CANCELLED;
+    CANCELLED,
+    TIMEOUT;
 
     private static final Map<TaskStatus, Set<TaskStatus>> TRANSITIONS = Map.of(
-            PENDING, EnumSet.of(LEASED, CANCELLED),
-            LEASED, EnumSet.of(EXECUTING, RETRYING, FAILED, CANCELLED),
-            EXECUTING, EnumSet.of(RETRYING, SUCCEEDED, FAILED, CANCELLED),
-            RETRYING, EnumSet.of(LEASED, CANCELLED),
+            PENDING, EnumSet.of(LEASED, CANCELLED, TIMEOUT),
+            LEASED, EnumSet.of(EXECUTING, RETRYING, FAILED, CANCELLED, TIMEOUT),
+            EXECUTING, EnumSet.of(RETRYING, SUCCEEDED, FAILED, CANCELLED, TIMEOUT),
+            RETRYING, EnumSet.of(LEASED, CANCELLED, TIMEOUT),
             SUCCEEDED, EnumSet.noneOf(TaskStatus.class),
             FAILED, EnumSet.noneOf(TaskStatus.class),
-            CANCELLED, EnumSet.noneOf(TaskStatus.class)
+            CANCELLED, EnumSet.noneOf(TaskStatus.class),
+            TIMEOUT, EnumSet.noneOf(TaskStatus.class)
     );
+
+    public boolean isTerminal() {
+        return this == SUCCEEDED || this == FAILED || this == CANCELLED || this == TIMEOUT;
+    }
 
     public void requireTransitionTo(TaskStatus next) {
         if (!TRANSITIONS.get(this).contains(next)) {

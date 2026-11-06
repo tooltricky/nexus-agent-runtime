@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 @EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
-        "nexus.worker.enabled=false",
+        "nexus.timeout.enabled=false", "nexus.worker.enabled=false",
         "nexus.watchdog.enabled=false",
         "spring.datasource.url=${TEST_DB_URL}",
         "spring.datasource.username=${TEST_DB_USERNAME:nexus}",

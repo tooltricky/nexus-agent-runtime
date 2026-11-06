@@ -30,6 +30,7 @@ public class FakeWorkerService {
     private final Executor executionExecutor;
     private final long dispatchRetryDelayMs;
     private final LeaseHeartbeatService heartbeats;
+    private final ExecutionControlRegistry executionControls;
     private volatile Instant dispatchRetryAt = Instant.MIN;
     private final Object selectionLock = new Object();
     private final Set<ExecutionKey> inFlight = new HashSet<>();
@@ -53,10 +54,11 @@ public class FakeWorkerService {
             @Qualifier("workerExecutionExecutor") Executor executionExecutor,
             WorkerLeaseConfiguration configuration,
             @Value("${nexus.worker.dispatch-retry-delay-ms:200}") long dispatchRetryDelayMs,
-            LeaseHeartbeatService heartbeats
+            LeaseHeartbeatService heartbeats,
+            ExecutionControlRegistry executionControls
     ) {
         this(workerTransactions, failures, executor, executionExecutor, configuration.leaseDurationMs(),
-                dispatchRetryDelayMs, heartbeats);
+                dispatchRetryDelayMs, heartbeats, executionControls);
     }
 
     public FakeWorkerService(
@@ -64,6 +66,15 @@ public class FakeWorkerService {
             Executor executionExecutor, long leaseDurationMs, long dispatchRetryDelayMs,
             LeaseHeartbeatService heartbeats
     ) {
+        this(workerTransactions, failures, executor, executionExecutor, leaseDurationMs, dispatchRetryDelayMs, heartbeats, null);
+    }
+
+    public FakeWorkerService(
+            WorkerTransactionService workerTransactions, TaskFailureService failures, TaskExecutor executor,
+            Executor executionExecutor, long leaseDurationMs, long dispatchRetryDelayMs,
+            LeaseHeartbeatService heartbeats, ExecutionControlRegistry executionControls
+    ) {
+        this.executionControls = executionControls;
         this.workerTransactions = workerTransactions;
         this.leaseDurationMs = leaseDurationMs;
         this.failures = failures;
@@ -141,19 +152,24 @@ public class FakeWorkerService {
             }
             track(task);
         }
+        ExecutionControlRegistry.Signal signal = executionControls == null ? null : executionControls.register(task);
         try {
-            if (!workerTransactions.hasLiveExecutingLease(task, workerId)) {
+            if (!workerTransactions.hasLiveExecutingLease(task, workerId) || (signal != null && signal.isStopRequested())) {
                 return;
             }
             JsonNode output;
             try {
-                output = executor.execute(task);
+                output = signal == null ? executor.execute(task) : executor.execute(task, signal);
             } catch (RuntimeException failure) {
+                if (signal != null && signal.isStopRequested()) return;
                 failures.failOwnedTask(task, workerId, failure.toString());
                 return;
             }
-            workerTransactions.completeSuccessfully(task, workerId, output);
+            if (signal == null || !signal.isStopRequested()) {
+                workerTransactions.completeSuccessfully(task, workerId, output);
+            }
         } finally {
+            if (signal != null) signal.close();
             stopHeartbeat(task);
             synchronized (selectionLock) {
                 inFlight.remove(key);

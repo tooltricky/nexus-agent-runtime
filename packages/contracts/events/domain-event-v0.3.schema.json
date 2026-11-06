@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexus.local/schemas/v0.3/domain-event.schema.json",
+  "title": "Nexus Domain Event",
+  "type": "object",
+  "required": [
+    "sequence",
+    "event_id",
+    "aggregate_type",
+    "aggregate_id",
+    "run_id",
+    "event_type",
+    "payload",
+    "occurred_at",
+    "schema_version"
+  ],
+  "properties": {
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^evt_[0-9a-f-]{36}$"
+    },
+    "aggregate_type": {
+      "type": "string",
+      "enum": [
+        "RUN",
+        "TASK"
+      ]
+    },
+    "aggregate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^run_[0-9a-f-]{36}$"
+    },
+    "task_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^tsk_[0-9a-f-]{36}$",
+      "description": "Required and non-null for TASK events; omitted for RUN events (legacy null is readable)."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "TaskTimedOut",
+        "RunTimedOut",
+        "TaskRetrySkipped"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "schema_version": {
+      "const": "0.3"
+    }
+  },
+  "description": "Version 0.3: deadline timeouts and skipped retries. Prior event schemas remain frozen.",
+  "$defs": {
+    "taskId": {
+      "type": "string",
+      "pattern": "^tsk_[0-9a-f-]{36}$"
+    },
+    "TaskTimedOut": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "reason",
+        "deadline_at",
+        "attempt",
+        "max_attempts"
+      ],
+      "properties": {
+        "from": {
+          "enum": [
+            "PENDING",
+            "LEASED",
+            "EXECUTING",
+            "RETRYING"
+          ]
+        },
+        "to": {
+          "const": "TIMEOUT"
+        },
+        "reason": {
+          "const": "DEADLINE_EXCEEDED"
+        },
+        "deadline_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "RunTimedOut": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "reason",
+        "deadline_at",
+        "task_id"
+      ],
+      "properties": {
+        "from": {
+          "enum": [
+            "CREATED",
+            "QUEUED",
+            "RUNNING"
+          ]
+        },
+        "to": {
+          "const": "TIMEOUT"
+        },
+        "reason": {
+          "const": "DEADLINE_EXCEEDED"
+        },
+        "deadline_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "task_id": {
+          "$ref": "#/$defs/taskId"
+        }
+      }
+    },
+    "TaskRetrySkipped": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "reason",
+        "deadline_at",
+        "attempt",
+        "max_attempts",
+        "next_attempt_at"
+      ],
+      "properties": {
+        "from": {
+          "enum": [
+            "LEASED",
+            "EXECUTING"
+          ]
+        },
+        "to": {
+          "const": "RETRYING"
+        },
+        "reason": {
+          "const": "DEADLINE_BEFORE_RETRY"
+        },
+        "deadline_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "next_attempt_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "task_id"
+        ],
+        "properties": {
+          "task_id": {
+            "$ref": "#/$defs/taskId"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskTimedOut"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskTimedOut"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "RunTimedOut"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "RUN"
+          },
+          "payload": {
+            "$ref": "#/$defs/RunTimedOut"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "const": "TaskRetrySkipped"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "aggregate_type": {
+            "const": "TASK"
+          },
+          "payload": {
+            "$ref": "#/$defs/TaskRetrySkipped"
+          }
+        }
+      }
+    }
+  ]
+}

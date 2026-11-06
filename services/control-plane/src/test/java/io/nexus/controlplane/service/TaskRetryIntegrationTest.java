@@ -45,7 +45,7 @@ import static io.nexus.controlplane.support.RuntimeTestSupport.race;
 /** Runs only against an explicitly supplied, disposable PostgreSQL database. */
 @EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 @SpringBootTest(properties = {
-        "nexus.worker.enabled=false",
+        "nexus.timeout.enabled=false", "nexus.worker.enabled=false",
         "nexus.watchdog.enabled=false",
         "nexus.worker.retry-initial-delay-ms=60000",
         "nexus.worker.retry-max-delay-ms=240000",

@@ -38,7 +38,7 @@ import static org.awaitility.Awaitility.await;
 
 @EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 @SpringBootTest(properties = {
-        "nexus.worker.enabled=false", "nexus.watchdog.enabled=false",
+        "nexus.timeout.enabled=false", "nexus.worker.enabled=false", "nexus.watchdog.enabled=false",
         "nexus.worker.retry-initial-delay-ms=60000", "nexus.worker.retry-max-delay-ms=240000",
         "spring.datasource.url=${TEST_DB_URL}",
         "spring.datasource.username=${TEST_DB_USERNAME:nexus}",
@@ -100,7 +100,7 @@ class LeaseHeartbeatIntegrationTest {
         assertThat(transactions.renewLease(withFence(task, task.attempt(), task.version() - 1), "worker", LEASE)).isFalse();
         assertThat(task()).isEqualTo(task);
         assertThat(store.findTimeline(runId)).isEqualTo(events);
-        assertThat(transactions.renewLease(new TaskRecord("absent", task.runId(), task.name(), task.status(),
+        assertThat(transactions.renewLease(new TaskRecord("absent", task.runId(), task.name(), task.deadlineAt(), task.status(),
                 task.input(), task.output(), task.leaseOwner(), task.leaseExpiresAt(), task.attempt(), task.maxAttempts(),
                 task.nextAttemptAt(), task.version(), task.createdAt(), task.updatedAt()), "worker", LEASE)).isFalse();
     }
@@ -424,7 +424,7 @@ class LeaseHeartbeatIntegrationTest {
     private List<String> types() { return store.findTimeline(runId).stream().map(EventRecord::eventType).toList(); }
     private void expire() { jdbc.update("UPDATE tasks SET lease_expires_at=clock_timestamp()-INTERVAL '1 second' WHERE run_id=?", runId); }
     private static TaskRecord withFence(TaskRecord t, int attempt, long version) {
-        return new TaskRecord(t.id(), t.runId(), t.name(), t.status(), t.input(), t.output(), t.leaseOwner(),
+        return new TaskRecord(t.id(), t.runId(), t.name(), t.deadlineAt(), t.status(), t.input(), t.output(), t.leaseOwner(),
                 t.leaseExpiresAt(), attempt, t.maxAttempts(), t.nextAttemptAt(), version, t.createdAt(), t.updatedAt());
     }
     private static void awaitLatch(CountDownLatch latch) {

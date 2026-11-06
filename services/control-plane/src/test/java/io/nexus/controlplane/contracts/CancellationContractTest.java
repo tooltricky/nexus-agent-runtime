@@ -77,7 +77,7 @@ class CancellationContractTest {
                     : java.util.Arrays.stream(RunStatus.values()).map(Enum::name).toList();
             for (String source : states) {
                 ((ObjectNode) event.path("payload")).put("from", source);
-                boolean terminal = List.of("SUCCEEDED", "FAILED", "CANCELLED").contains(source);
+                boolean terminal = List.of("SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT").contains(source);
                 assertThat(ContractAssertions.eventErrors(event).isEmpty()).as(type + " from " + source).isEqualTo(!terminal);
             }
         }

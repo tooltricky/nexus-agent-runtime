@@ -14,14 +14,16 @@ public class RunCancellationService {
     private final RuntimeStore store;
     private final ObjectMapper mapper;
     private final RuntimeService runtime;
+    private final TaskTimeoutService timeouts;
 
-    public RunCancellationService(RuntimeStore store, ObjectMapper mapper, RuntimeService runtime) {
+    public RunCancellationService(RuntimeStore store, ObjectMapper mapper, RuntimeService runtime, TaskTimeoutService timeouts) {
         this.store = store;
         this.mapper = mapper;
         this.runtime = runtime;
+        this.timeouts = timeouts;
     }
 
-    @Transactional
+    @Transactional(noRollbackFor = CancellationConflictException.class)
     public RunResponse cancel(String runId) {
         // Every existing worker path locks/updates Task before Run. Never invert that order.
         var tasks = store.findTasksForUpdate(runId);
@@ -30,7 +32,7 @@ public class RunCancellationService {
         if (run.status() == RunStatus.CANCELLED) {
             return runtime.getRun(runId);
         }
-        if (run.status() == RunStatus.SUCCEEDED || run.status() == RunStatus.FAILED) {
+        if (run.status().isTerminal()) {
             throw new CancellationConflictException("Completed Run cannot be cancelled: " + runId);
         }
         // B05 retains the database's one-Task-per-Run invariant; DAG aggregation belongs to B23.
@@ -38,9 +40,11 @@ public class RunCancellationService {
             throw new IllegalStateException("Expected one Task for Run: " + runId);
         }
         TaskRecord task = tasks.getFirst();
-        if (task.status() == TaskStatus.SUCCEEDED || task.status() == TaskStatus.FAILED
-                || task.status() == TaskStatus.CANCELLED) {
+        if (task.status().isTerminal()) {
             throw new IllegalStateException("Active Run has terminal Task: " + runId);
+        }
+        if (timeouts.expireLocked(task, run, store.currentTime())) {
+            throw new CancellationConflictException("Timed-out Run cannot be cancelled: " + runId);
         }
         store.cancelTask(task);
         store.transitionRun(run, RunStatus.CANCELLED, null);

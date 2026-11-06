@@ -34,6 +34,7 @@ public class ApiExceptionHandler {
     }
 
     @ExceptionHandler({
+            io.nexus.controlplane.service.InvalidRequestException.class,
             MethodArgumentNotValidException.class,
             ConstraintViolationException.class,
             MissingRequestHeaderException.class,

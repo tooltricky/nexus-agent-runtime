@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: Nexus Agent Runtime API
-  version: 0.2.0
+  version: 0.3.0
   description: >-
-    Contract revision 0.2 for the /v1 API. Successful Run/timeline GET and cancel POST
-    responses identify this revision with Nexus-API-Contract: 0.2. Clients must
-    understand CANCELLED and mixed event versions before cancellation is enabled.
+    Contract revision 0.3 for the /v1 API. Successful Run/timeline GET and cancel POST
+    responses identify this revision with Nexus-API-Contract: 0.3. Clients must
+    understand TIMEOUT and mixed 0.1/0.2/0.3 event versions before deadline processing is enabled.
 servers:
   - url: http://localhost:8080
 paths:
@@ -66,7 +66,7 @@ paths:
               description: Explicit representation revision; no legacy negotiation is supported.
               required: true
               schema:
-                const: "0.2"
+                const: "0.3"
           content:
             application/json:
               schema:
@@ -83,8 +83,9 @@ paths:
         No request body or Idempotency-Key is required; the body is ignored. Cancels
         QUEUED/RUNNING Runs, including leased, executing, and retrying Tasks.
         Repeating cancellation succeeds without changing state or appending events.
-        Completed Runs reject cancellation. Concurrent terminal operations serialize;
-        the first valid terminal transaction to commit wins. Cancellation may wait
+        Completed Runs reject cancellation. If expiry is discovered here, TIMEOUT
+        is committed before returning 409. Locked eligibility checks before deadline
+        may commit later; after deadline unfinished work must time out. Cancellation may wait
         for an executing transaction and does not undo external side effects or
         promise immediate interruption.
       responses:
@@ -95,7 +96,7 @@ paths:
               description: Explicit representation revision; no legacy negotiation is supported.
               required: true
               schema:
-                const: "0.2"
+                const: "0.3"
           content:
             application/json:
               schema:
@@ -112,7 +113,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Run has already succeeded or failed; no state or event changes
+          description: Run succeeded, failed or timed out; a newly discovered expiry commits TIMEOUT
           content:
             application/json:
               schema:
@@ -131,7 +132,7 @@ paths:
               description: Explicit representation revision; no legacy negotiation is supported.
               required: true
               schema:
-                const: "0.2"
+                const: "0.3"
           content:
             application/json:
               schema:
@@ -192,6 +193,11 @@ components:
           type: string
           minLength: 1
           pattern: '[^\x00-\x20]'
+        deadline_at:
+          description: Optional absolute RFC 3339 offset timestamp (seconds required, at most nine fractional digits, local input years 0001–9999; Z or numeric offsets from -23:59 through +23:59 with minutes 00–59). UTC normalization may cross into year 0000 or 10000. Null/omission means no deadline. Normalized to UTC microseconds; first creation requires a future value, same-request replay remains valid after expiry.
+          type: [string, "null"]
+          format: date-time
+          pattern: '^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt][0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$'
     AcceptedRun:
       type: object
       required: [run_id]
@@ -200,14 +206,20 @@ components:
           type: string
     RunStatus:
       type: string
-      enum: [CREATED, QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED]
+      enum: [CREATED, QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED, TIMEOUT]
     TaskStatus:
       type: string
-      enum: [PENDING, LEASED, EXECUTING, RETRYING, SUCCEEDED, FAILED, CANCELLED]
+      enum: [PENDING, LEASED, EXECUTING, RETRYING, SUCCEEDED, FAILED, CANCELLED, TIMEOUT]
     Task:
       type: object
       required: [task_id, name, status, input, attempt, max_attempts, next_attempt_at, created_at, updated_at]
       allOf:
+        - if:
+            properties:
+              status:
+                const: TIMEOUT
+          then:
+            required: [deadline_at]
         - if:
             properties:
               status:
@@ -277,10 +289,20 @@ components:
         updated_at:
           type: string
           format: date-time
+        deadline_at:
+          description: Persisted absolute deadline, omitted when unlimited. Normally rendered in UTC; boundary instants in UTC year 0000 or 10000 use +23:59 or -23:59 to keep a four-digit local year. Task and Run share this value.
+          type: string
+          format: date-time
     Run:
       type: object
       required: [run_id, session_id, input, status, tasks, created_at, updated_at]
       allOf:
+        - if:
+            properties:
+              status:
+                const: TIMEOUT
+          then:
+            required: [deadline_at]
         - if:
             properties:
               status:
@@ -321,6 +343,10 @@ components:
         updated_at:
           type: string
           format: date-time
+        deadline_at:
+          description: Persisted absolute deadline, omitted when unlimited. Normally rendered in UTC; boundary instants in UTC year 0000 or 10000 use +23:59 or -23:59 to keep a four-digit local year. Task and Run share this value.
+          type: string
+          format: date-time
     Output:
       type: object
       required: [summary]
@@ -328,11 +354,13 @@ components:
         summary:
           type: string
     DomainEvent:
-      description: Absent schema_version selects legacy 0.1; explicit 0.2 selects the new schema; all other versions are rejected.
+      description: No schema_version selects frozen 0.1; explicit 0.2 or 0.3 selects its schema. Unknown versions are rejected.
       if:
         required: [schema_version]
       then:
-        $ref: "./events/domain-event-v0.2.schema.json"
+        oneOf:
+          - $ref: "./events/domain-event-v0.2.schema.json"
+          - $ref: "./events/domain-event-v0.3.schema.json"
       else:
         $ref: "./events/domain-event.schema.json"
     Timeline:

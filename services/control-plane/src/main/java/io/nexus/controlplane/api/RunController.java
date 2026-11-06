@@ -44,16 +44,16 @@ public class RunController {
 
     @GetMapping("/{runId}")
     public ResponseEntity<RunResponse> getRun(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.2").body(runtimeService.getRun(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.3").body(runtimeService.getRun(runId));
     }
 
     @PostMapping("/{runId}/cancel")
     public ResponseEntity<RunResponse> cancelRun(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.2").body(cancellations.cancel(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.3").body(cancellations.cancel(runId));
     }
 
     @GetMapping("/{runId}/timeline")
     public ResponseEntity<TimelineResponse> getTimeline(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.2").body(runtimeService.getTimeline(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.3").body(runtimeService.getTimeline(runId));
     }
 }

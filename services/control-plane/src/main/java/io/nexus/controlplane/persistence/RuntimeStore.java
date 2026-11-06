@@ -48,11 +48,16 @@ public class RuntimeStore {
     }
 
     public boolean tryInsertRun(String id, String sessionId, String idempotencyKey, String requestHash, String input) {
+        return tryInsertRun(id, sessionId, idempotencyKey, requestHash, input, null);
+    }
+
+    public boolean tryInsertRun(String id, String sessionId, String idempotencyKey, String requestHash, String input,
+                                Instant deadlineAt) {
         return jdbc.update("""
-                INSERT INTO runs (id, session_id, idempotency_key, request_hash, input, status)
-                VALUES (?, ?, ?, ?, ?, 'CREATED')
+                INSERT INTO runs (id, session_id, idempotency_key, request_hash, input, status, deadline_at)
+                VALUES (?, ?, ?, ?, ?, 'CREATED', ?)
                 ON CONFLICT (idempotency_key) DO NOTHING
-                """, id, sessionId, idempotencyKey, requestHash, input) == 1;
+                """, id, sessionId, idempotencyKey, requestHash, input, timestamp(deadlineAt)) == 1;
     }
 
     public Optional<RunRecord> findRun(String id) {
@@ -69,10 +74,14 @@ public class RuntimeStore {
     }
 
     public void insertTask(String id, String runId, String name, JsonNode input) {
+        insertTask(id, runId, name, input, null);
+    }
+
+    public void insertTask(String id, String runId, String name, JsonNode input, Instant deadlineAt) {
         jdbc.update("""
-                INSERT INTO tasks (id, run_id, name, status, input)
-                VALUES (?, ?, ?, 'PENDING', CAST(? AS jsonb))
-                """, id, runId, name, json(input));
+                INSERT INTO tasks (id, run_id, name, status, input, deadline_at)
+                VALUES (?, ?, ?, 'PENDING', CAST(? AS jsonb), ?)
+                """, id, runId, name, json(input), timestamp(deadlineAt));
     }
 
     public List<TaskRecord> findTasks(String runId) {
@@ -81,6 +90,40 @@ public class RuntimeStore {
 
     public List<TaskRecord> findTasksForUpdate(String runId) {
         return jdbc.query("SELECT * FROM tasks WHERE run_id = ? ORDER BY id FOR UPDATE", this::mapTask, runId);
+    }
+
+    public Instant currentTime() {
+        return jdbc.queryForObject("SELECT clock_timestamp()", Timestamp.class).toInstant();
+    }
+
+    public Optional<TaskRecord> findTaskForUpdate(String taskId) {
+        return queryOne("SELECT * FROM tasks WHERE id = ? FOR UPDATE", this::mapTask, taskId);
+    }
+
+    public List<TaskRecord> findDueTasksForUpdate(int batchSize) {
+        return jdbc.query("""
+                SELECT * FROM tasks WHERE status IN ('PENDING','LEASED','EXECUTING','RETRYING')
+                  AND deadline_at <= clock_timestamp()
+                ORDER BY deadline_at, id LIMIT ? FOR UPDATE SKIP LOCKED
+                """, this::mapTask, batchSize);
+    }
+
+    /** Read committed terminal state without waiting for row locks or scanning historical Tasks. */
+    public List<TaskRecord> findTimedOutTasks(Set<String> taskIds) {
+        if (taskIds.isEmpty()) return List.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(taskIds.size(), "?"));
+        return jdbc.query("SELECT * FROM tasks WHERE status = 'TIMEOUT' AND id IN (" + placeholders + ")",
+                this::mapTask, taskIds.toArray());
+    }
+
+    public void timeoutTask(TaskRecord task) {
+        task.status().requireTransitionTo(TaskStatus.TIMEOUT);
+        int updated = jdbc.update("""
+                UPDATE tasks SET status = 'TIMEOUT', output = NULL, lease_owner = NULL, lease_expires_at = NULL,
+                    version = version + 1, updated_at = clock_timestamp()
+                WHERE id = ? AND status = ? AND version = ? AND attempt = ?
+                """, task.id(), task.status().name(), task.version(), task.attempt());
+        requireSingleUpdate(updated, "Task", task.id());
     }
 
     public void cancelTask(TaskRecord task) {
@@ -110,6 +153,7 @@ public class RuntimeStore {
                             FROM tasks
                             WHERE status IN ('PENDING', 'RETRYING')
                               AND next_attempt_at <= clock_timestamp()
+                              AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
                             ORDER BY created_at, id
                             FOR UPDATE SKIP LOCKED
                             LIMIT 1
@@ -117,12 +161,13 @@ public class RuntimeStore {
                         UPDATE tasks AS task
                         SET status = 'LEASED',
                             lease_owner = ?,
-                            lease_expires_at = clock_timestamp() + (? * INTERVAL '1 millisecond'),
+                            lease_expires_at = LEAST(deadline_at, clock_timestamp() + (? * INTERVAL '1 millisecond')),
                             attempt = attempt + 1,
                             version = version + 1,
                             updated_at = CURRENT_TIMESTAMP
                         FROM candidate
                         WHERE task.id = candidate.id
+                          AND (task.deadline_at IS NULL OR task.deadline_at > clock_timestamp())
                         RETURNING task.*, candidate.previous_status
                         """, (rs, rowNum) -> new TaskClaim(mapTask(rs, rowNum),
                                 TaskStatus.valueOf(rs.getString("previous_status"))), leaseOwner, leaseMillis)
@@ -151,6 +196,7 @@ public class RuntimeStore {
                         WHERE status IN ('LEASED', 'EXECUTING')
                           AND lease_owner = ?
                           AND lease_expires_at > clock_timestamp()
+                          AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
                           %s
                         ORDER BY created_at, id
                         FOR UPDATE SKIP LOCKED
@@ -170,6 +216,7 @@ public class RuntimeStore {
                       AND attempt = ?
                       AND lease_owner = ?
                       AND lease_expires_at > clock_timestamp()
+                      AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
                 )
                 """, Boolean.class, task.id(), task.version(), task.attempt(), leaseOwner);
         return Boolean.TRUE.equals(exists);
@@ -194,12 +241,13 @@ public class RuntimeStore {
         }
         return jdbc.update("""
                 UPDATE tasks
-                SET lease_expires_at = GREATEST(lease_expires_at,
-                        clock_timestamp() + (? * INTERVAL '1 millisecond')),
+                SET lease_expires_at = LEAST(deadline_at, GREATEST(lease_expires_at,
+                        clock_timestamp() + (? * INTERVAL '1 millisecond'))),
                     updated_at = clock_timestamp()
                 WHERE id = ? AND status IN ('LEASED', 'EXECUTING')
                   AND version = ? AND attempt = ? AND lease_owner = ?
                   AND lease_expires_at > clock_timestamp()
+                  AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
                 """, millis, task.id(), task.version(), task.attempt(), leaseOwner) == 1;
     }
 
@@ -234,6 +282,7 @@ public class RuntimeStore {
             return false;
         }
         task.status().requireTransitionTo(next);
+        if (findTaskForUpdate(task.id()).isEmpty()) return false;
         int updated = jdbc.update("""
                 UPDATE tasks
                 SET status = ?,
@@ -248,6 +297,7 @@ public class RuntimeStore {
                   AND attempt = ?
                   AND lease_owner = ?
                   AND lease_expires_at > clock_timestamp()
+                  AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
                 """, next.name(), jsonOrNull(output), next.name(), next.name(), task.id(),
                 task.status().name(), task.version(), task.attempt(), leaseOwner);
         return updated == 1;
@@ -268,6 +318,7 @@ public class RuntimeStore {
     public Optional<TaskRecord> finishFailedAttempt(
             TaskRecord task, String leaseOwner, Duration retryDelay, boolean expired
     ) {
+        if (findTaskForUpdate(task.id()).isEmpty()) return Optional.empty();
         TaskStatus next = task.attempt() < task.maxAttempts() ? TaskStatus.RETRYING : TaskStatus.FAILED;
         task.status().requireTransitionTo(next);
         // Expiry recovery and worker failure reporting use mutually exclusive lease predicates.
@@ -278,12 +329,15 @@ public class RuntimeStore {
                 UPDATE tasks
                 SET status = ?, output = NULL,
                     lease_owner = NULL, lease_expires_at = NULL,
-                    next_attempt_at = clock_timestamp() + (? * INTERVAL '1 millisecond'),
+                    next_attempt_at = CASE WHEN ? = 'RETRYING' THEN
+                        LEAST(deadline_at, clock_timestamp() + (? * INTERVAL '1 millisecond'))
+                        ELSE clock_timestamp() END,
                     version = version + 1, updated_at = clock_timestamp()
                 WHERE id = ? AND status = ? AND version = ? AND attempt = ? AND lease_owner = ?
                   AND %s
+                  AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
                 RETURNING *
-                """.formatted(leasePredicate), this::mapTask, next.name(), retryDelay.toMillis(),
+                """.formatted(leasePredicate), this::mapTask, next.name(), next.name(), retryDelay.toMillis(),
                 task.id(), task.status().name(), task.version(), task.attempt(), leaseOwner).stream().findFirst();
     }
 
@@ -335,6 +389,7 @@ public class RuntimeStore {
                 rs.getString("idempotency_key"),
                 rs.getString("request_hash"),
                 rs.getString("input"),
+                instantOrNull(rs, "deadline_at"),
                 RunStatus.valueOf(rs.getString("status")),
                 jsonNode(rs.getString("output")),
                 rs.getLong("version"),
@@ -348,6 +403,7 @@ public class RuntimeStore {
                 rs.getString("id"),
                 rs.getString("run_id"),
                 rs.getString("name"),
+                instantOrNull(rs, "deadline_at"),
                 TaskStatus.valueOf(rs.getString("status")),
                 jsonNode(rs.getString("input")),
                 jsonNode(rs.getString("output")),
@@ -399,6 +455,8 @@ public class RuntimeStore {
     private String jsonOrNull(JsonNode value) {
         return value == null ? null : json(value);
     }
+
+    private Timestamp timestamp(Instant value) { return value == null ? null : Timestamp.from(value); }
 
     private Instant instant(ResultSet rs, String column) throws SQLException {
         Timestamp value = rs.getTimestamp(column);

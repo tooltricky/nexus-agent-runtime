@@ -10,16 +10,22 @@ public enum RunStatus {
     RUNNING,
     SUCCEEDED,
     FAILED,
-    CANCELLED;
+    CANCELLED,
+    TIMEOUT;
 
     private static final Map<RunStatus, Set<RunStatus>> TRANSITIONS = Map.of(
-            CREATED, EnumSet.of(QUEUED, CANCELLED),
-            QUEUED, EnumSet.of(RUNNING, CANCELLED),
-            RUNNING, EnumSet.of(SUCCEEDED, FAILED, CANCELLED),
+            CREATED, EnumSet.of(QUEUED, CANCELLED, TIMEOUT),
+            QUEUED, EnumSet.of(RUNNING, CANCELLED, TIMEOUT),
+            RUNNING, EnumSet.of(SUCCEEDED, FAILED, CANCELLED, TIMEOUT),
             SUCCEEDED, EnumSet.noneOf(RunStatus.class),
             FAILED, EnumSet.noneOf(RunStatus.class),
-            CANCELLED, EnumSet.noneOf(RunStatus.class)
+            CANCELLED, EnumSet.noneOf(RunStatus.class),
+            TIMEOUT, EnumSet.noneOf(RunStatus.class)
     );
+
+    public boolean isTerminal() {
+        return this == SUCCEEDED || this == FAILED || this == CANCELLED || this == TIMEOUT;
+    }
 
     public void requireTransitionTo(RunStatus next) {
         if (!TRANSITIONS.get(this).contains(next)) {

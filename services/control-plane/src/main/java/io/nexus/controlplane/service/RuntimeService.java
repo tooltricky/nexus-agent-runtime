@@ -48,6 +48,10 @@ public class RuntimeService {
             throw new NotFoundException("Session not found: " + request.sessionId());
         }
 
+        if (request.deadlineAt() != null) {
+            request = new CreateRunRequest(request.sessionId(), request.input(),
+                    request.deadlineAt().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+        }
         String requestHash = requestHash(request);
         String runId = Ids.runId();
         boolean created = store.tryInsertRun(
@@ -55,7 +59,8 @@ public class RuntimeService {
                 request.sessionId(),
                 idempotencyKey,
                 requestHash,
-                request.input()
+                request.input(),
+                request.deadlineAt()
         );
 
         if (!created) {
@@ -69,6 +74,11 @@ public class RuntimeService {
             return new AcceptedRunResponse(existing.id());
         }
 
+        // Validate time only after winning insertion: an expired idempotent replay remains valid.
+        if (request.deadlineAt() != null && !request.deadlineAt().isAfter(store.currentTime())) {
+            throw new InvalidRequestException("deadline_at must be in the future");
+        }
+
         ObjectNode runCreated = objectMapper.createObjectNode()
                 .put("status", RunStatus.CREATED.name())
                 .put("input", request.input());
@@ -76,7 +86,7 @@ public class RuntimeService {
 
         String taskId = Ids.taskId();
         ObjectNode taskInput = objectMapper.createObjectNode().put("input", request.input());
-        store.insertTask(taskId, runId, TASK_NAME, taskInput);
+        store.insertTask(taskId, runId, TASK_NAME, taskInput, request.deadlineAt());
         ObjectNode taskCreated = objectMapper.createObjectNode()
                 .put("status", "PENDING")
                 .put("name", TASK_NAME);
@@ -105,6 +115,7 @@ public class RuntimeService {
                 run.id(),
                 run.sessionId(),
                 run.input(),
+                run.deadlineAt(),
                 run.status(),
                 run.output(),
                 tasks,
@@ -130,6 +141,7 @@ public class RuntimeService {
         return new TaskResponse(
                 task.id(),
                 task.name(),
+                task.deadlineAt(),
                 task.status(),
                 task.input(),
                 task.output(),
@@ -162,7 +174,10 @@ public class RuntimeService {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] bytes = digest.digest(
-                    (request.sessionId() + "\n" + request.input()).getBytes(StandardCharsets.UTF_8)
+                    (request.deadlineAt() == null ? request.sessionId() + "\n" + request.input()
+                            : "deadline-v1\0" + objectMapper.createArrayNode().add(request.sessionId())
+                                    .add(request.input()).add(request.deadlineAt().toString()).toString())
+                            .getBytes(StandardCharsets.UTF_8)
             );
             return HexFormat.of().formatHex(bytes);
         } catch (NoSuchAlgorithmException e) {

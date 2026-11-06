@@ -44,11 +44,17 @@ class TaskStatusTest {
     @Test
     void everyTerminalStateRejectsAllFurtherTransitionsIncludingItself() {
         for (TaskStatus terminal : java.util.List.of(
-                TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED)) {
+                TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMEOUT)) {
             for (TaskStatus next : TaskStatus.values()) {
                 assertThrows(IllegalStateException.class, () -> terminal.requireTransitionTo(next),
                         terminal + " -> " + next);
             }
+        }
+    }
+    @Test
+    void timeoutIsAllowedFromEveryUnfinishedState() {
+        for (TaskStatus status : java.util.List.of(TaskStatus.PENDING, TaskStatus.LEASED, TaskStatus.EXECUTING, TaskStatus.RETRYING)) {
+            assertDoesNotThrow(() -> status.requireTransitionTo(TaskStatus.TIMEOUT));
         }
     }
 }

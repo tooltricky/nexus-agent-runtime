@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.nexus.controlplane.domain.Records.RunRecord;
 import io.nexus.controlplane.domain.Records.TaskRecord;
 import io.nexus.controlplane.domain.RunStatus;
+import io.nexus.controlplane.domain.DeadlineTimestamp;
 import io.nexus.controlplane.domain.TaskStatus;
 import io.nexus.controlplane.persistence.RuntimeStore;
 import org.springframework.stereotype.Service;
@@ -17,11 +18,13 @@ public class TaskFailureService {
     private final RuntimeStore store;
     private final ObjectMapper objectMapper;
     private final RetryPolicy retryPolicy;
+    private final TaskTimeoutService timeouts;
 
-    public TaskFailureService(RuntimeStore store, ObjectMapper objectMapper, RetryPolicy retryPolicy) {
+    public TaskFailureService(RuntimeStore store, ObjectMapper objectMapper, RetryPolicy retryPolicy, TaskTimeoutService timeouts) {
         this.store = store;
         this.objectMapper = objectMapper;
         this.retryPolicy = retryPolicy;
+        this.timeouts = timeouts;
     }
 
     /** Duplicate, stale, expired, and foreign-worker reports cannot change state or emit events. */
@@ -57,6 +60,13 @@ public class TaskFailureService {
     }
 
     private boolean finishAttempt(TaskRecord task, String leaseOwner, boolean expired, String error) {
+        TaskRecord current = store.findTaskForUpdate(task.id()).orElse(null);
+        if (current == null || current.status() != task.status() || current.version() != task.version()
+                || current.attempt() != task.attempt() || !java.util.Objects.equals(current.leaseOwner(), leaseOwner)) {
+            return false;
+        }
+        RunRecord run = store.findRunForUpdate(task.runId()).orElseThrow();
+        if (timeouts.expireLocked(current, run, store.currentTime())) return false;
         Duration delay = task.attempt() < task.maxAttempts()
                 ? retryPolicy.delayAfter(task.attempt()) : Duration.ZERO;
         TaskRecord updated = store.finishFailedAttempt(task, leaseOwner, delay, expired).orElse(null);
@@ -78,14 +88,19 @@ public class TaskFailureService {
             payload.put("error", error);
         }
         if (updated.status() == TaskStatus.RETRYING) {
-            appendTaskEvent(task, "TaskRetried", payload
-                    .put("retry_delay_ms", delay.toMillis())
-                    .put("next_attempt_at", updated.nextAttemptAt().toString()));
+            if (updated.deadlineAt() != null && !updated.nextAttemptAt().isBefore(updated.deadlineAt())) {
+                store.appendVersionedEvent(Ids.eventId(), "TASK", task.id(), task.runId(), task.id(),
+                        "TaskRetrySkipped", payload.put("reason", "DEADLINE_BEFORE_RETRY")
+                                .put("deadline_at", DeadlineTimestamp.format(updated.deadlineAt()))
+                                .put("next_attempt_at", DeadlineTimestamp.format(updated.nextAttemptAt())), "0.3");
+            } else {
+                appendTaskEvent(task, "TaskRetried", payload
+                        .put("retry_delay_ms", delay.toMillis())
+                        .put("next_attempt_at", updated.nextAttemptAt().toString()));
+            }
         } else {
             appendTaskEvent(task, "TaskFailed", payload);
             // finishFailedAttempt already holds the Task lock, matching cancellation's lock order.
-            RunRecord run = store.findRunForUpdate(task.runId())
-                    .orElseThrow(() -> new IllegalStateException("Run not found: " + task.runId()));
             store.transitionRun(run, RunStatus.FAILED, null);
             store.appendEvent(Ids.eventId(), "RUN", run.id(), run.id(), null, "RunFailed",
                     objectMapper.createObjectNode()

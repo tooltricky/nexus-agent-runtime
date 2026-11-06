@@ -13,7 +13,10 @@ public final class ApiModels {
     private ApiModels() {
     }
 
-    public record CreateRunRequest(@NotBlank String sessionId, @NotBlank String input) {
+    public record CreateRunRequest(@NotBlank String sessionId, @NotBlank String input,
+            @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using = DeadlineDeserializer.class)
+            Instant deadlineAt) {
+        public CreateRunRequest(String sessionId, String input) { this(sessionId, input, null); }
     }
 
     public record SessionResponse(String sessionId, Instant createdAt) {
@@ -25,6 +28,7 @@ public final class ApiModels {
     public record TaskResponse(
             String taskId,
             String name,
+            @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = DeadlineSerializer.class) Instant deadlineAt,
             TaskStatus status,
             JsonNode input,
             JsonNode output,
@@ -42,6 +46,7 @@ public final class ApiModels {
             String runId,
             String sessionId,
             String input,
+            @com.fasterxml.jackson.databind.annotation.JsonSerialize(using = DeadlineSerializer.class) Instant deadlineAt,
             RunStatus status,
             JsonNode output,
             List<TaskResponse> tasks,

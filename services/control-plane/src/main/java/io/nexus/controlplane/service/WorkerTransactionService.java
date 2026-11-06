@@ -64,14 +64,14 @@ public class WorkerTransactionService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean completeSuccessfully(TaskRecord task, String workerId, JsonNode output) {
+        if (store.findTaskForUpdate(task.id()).isEmpty()) return false;
+        RunRecord run = store.findRunForUpdate(task.runId()).orElseThrow();
         if (!store.tryTransitionTaskOwned(task, TaskStatus.SUCCEEDED, output, workerId)) {
             return false;
         }
         store.appendEvent(Ids.eventId(), "TASK", task.id(), task.runId(), task.id(), "TaskSucceeded",
                 transitionPayload(TaskStatus.EXECUTING.name(), TaskStatus.SUCCEEDED.name()).set("output", output));
 
-        RunRecord run = store.findRunForUpdate(task.runId())
-                .orElseThrow(() -> new IllegalStateException("Run not found: " + task.runId()));
         store.transitionRun(run, RunStatus.SUCCEEDED, output);
         store.appendEvent(Ids.eventId(), "RUN", run.id(), run.id(), null, "RunSucceeded",
                 transitionPayload(RunStatus.RUNNING.name(), RunStatus.SUCCEEDED.name()).set("output", output));

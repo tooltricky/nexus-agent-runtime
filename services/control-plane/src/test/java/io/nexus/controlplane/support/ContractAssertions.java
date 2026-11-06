@@ -6,6 +6,9 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
+import com.networknt.schema.JsonMetaSchema;
+import com.networknt.schema.ExecutionContext;
+import com.networknt.schema.format.DateTimeFormat;
 import com.networknt.schema.SchemaValidatorsConfig;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
@@ -21,13 +24,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Validates the operation/status selected from the actual, version-controlled OpenAPI document. */
 public final class ContractAssertions {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final JsonSchemaFactory FACTORY = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
+    private static final java.util.regex.Pattern RFC3339_OFFSET = java.util.regex.Pattern.compile(
+            "[+-](?:[01][0-9]|2[0-3]):[0-5][0-9]$");
+    private static final JsonSchemaFactory FACTORY = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012,
+            builder -> builder.metaSchema(JsonMetaSchema.builder(JsonMetaSchema.getV202012())
+                    .format(new DateTimeFormat() {
+                        @Override public boolean matches(ExecutionContext context, String value) {
+                            // The library parses via OffsetDateTime (limited to +/-18h). RFC 3339
+                            // permits +/-23:59; validate that offset separately, retaining the
+                            // library's calendar/time validation and all other schema assertions.
+                            var offset = RFC3339_OFFSET.matcher(value);
+                            return super.matches(context, offset.find() ? value.substring(0, offset.start()) + "Z" : value);
+                        }
+                    }).build()));
     private static final SchemaValidatorsConfig CONFIG = SchemaValidatorsConfig.builder()
             .formatAssertionsEnabled(true).build();
     private static final JsonNode API = readApi("openapi.yaml");
     private static final JsonNode LEGACY_API = readApi("openapi-v0.1.yaml");
     private static final JsonNode EVENT_SCHEMA = resource("events/domain-event.schema.json");
     private static final JsonNode NEW_EVENT_SCHEMA = resource("events/domain-event-v0.2.schema.json");
+    private static final JsonNode TIMEOUT_EVENT_SCHEMA = resource("events/domain-event-v0.3.schema.json");
     private static final JsonSchema LEGACY_EVENT = FACTORY.getSchema(EVENT_SCHEMA, CONFIG);
     private static final JsonSchema EVENT = FACTORY.getSchema(API.at("/components/schemas/DomainEvent"), CONFIG);
 
@@ -35,7 +51,7 @@ public final class ContractAssertions {
 
     public static void response(String path, String method, ResponseEntity<JsonNode> response) {
         if ((method.equals("get") || path.endsWith("/cancel")) && response.getStatusCode().is2xxSuccessful()) {
-            assertThat(response.getHeaders().getFirst("Nexus-API-Contract")).isEqualTo("0.2");
+            assertThat(response.getHeaders().getFirst("Nexus-API-Contract")).isEqualTo("0.3");
         }
         assertThat(response.getHeaders().getContentType()).isNotNull()
                 .satisfies(type -> assertThat(type.isCompatibleWith(MediaType.APPLICATION_JSON)).isTrue());
@@ -87,6 +103,7 @@ public final class ContractAssertions {
     public static List<String> requiredEventPayloadFields(String eventType) {
         JsonNode required = EVENT_SCHEMA.path("$defs").path(eventType).path("required");
         if (required.isMissingNode()) required = NEW_EVENT_SCHEMA.path("$defs").path(eventType).path("required");
+        if (required.isMissingNode()) required = TIMEOUT_EVENT_SCHEMA.path("$defs").path(eventType).path("required");
         assertThat(required.isArray()).as("documented event type %s", eventType).isTrue();
         return requiredFields(required);
     }

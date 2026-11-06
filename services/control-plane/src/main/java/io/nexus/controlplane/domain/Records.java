@@ -17,6 +17,7 @@ public final class Records {
             String idempotencyKey,
             String requestHash,
             String input,
+            Instant deadlineAt,
             RunStatus status,
             JsonNode output,
             long version,
@@ -29,6 +30,7 @@ public final class Records {
             String id,
             String runId,
             String name,
+            Instant deadlineAt,
             TaskStatus status,
             JsonNode input,
             JsonNode output,
@@ -41,6 +43,7 @@ public final class Records {
             Instant createdAt,
             Instant updatedAt
     ) {
+
     }
 
     public record EventRecord(

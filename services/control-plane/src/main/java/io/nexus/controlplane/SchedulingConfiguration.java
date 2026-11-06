@@ -25,6 +25,9 @@ public class SchedulingConfiguration {
         return scheduler("nexus-heartbeat-");
     }
 
+    @Bean(name = "deadlineTaskScheduler", destroyMethod = "shutdown")
+    public ThreadPoolTaskScheduler deadlineTaskScheduler() { return scheduler("nexus-deadline-"); }
+
     @Bean(name = "workerExecutionExecutor", destroyMethod = "shutdown")
     public Executor workerExecutionExecutor(
             @Value("${nexus.worker.execution-concurrency:16}") int executionConcurrency

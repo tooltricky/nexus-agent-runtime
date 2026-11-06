@@ -36,7 +36,7 @@ import static org.awaitility.Awaitility.await;
 
 @EnabledIfEnvironmentVariable(named = "TEST_DB_URL", matches = ".+")
 @SpringBootTest(properties = {
-        "nexus.worker.enabled=false",
+        "nexus.timeout.enabled=false", "nexus.worker.enabled=false",
         "nexus.watchdog.enabled=false",
         "spring.datasource.url=${TEST_DB_URL}",
         "spring.datasource.username=${TEST_DB_USERNAME:nexus}",

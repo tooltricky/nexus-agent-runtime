@@ -36,11 +36,17 @@ class RunStatusTest {
     @Test
     void everyTerminalStateRejectsAllFurtherTransitionsIncludingItself() {
         for (RunStatus terminal : java.util.List.of(
-                RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED)) {
+                RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.TIMEOUT)) {
             for (RunStatus next : RunStatus.values()) {
                 assertThrows(IllegalStateException.class, () -> terminal.requireTransitionTo(next),
                         terminal + " -> " + next);
             }
+        }
+    }
+    @Test
+    void timeoutIsAllowedFromEveryUnfinishedState() {
+        for (RunStatus status : java.util.List.of(RunStatus.CREATED, RunStatus.QUEUED, RunStatus.RUNNING)) {
+            assertDoesNotThrow(() -> status.requireTransitionTo(RunStatus.TIMEOUT));
         }
     }
 }

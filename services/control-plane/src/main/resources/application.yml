@@ -25,6 +25,10 @@ management:
         enabled: true
 
 nexus:
+  timeout:
+    enabled: ${DEADLINE_WATCHDOG_ENABLED:true}
+    poll-delay-ms: ${DEADLINE_WATCHDOG_POLL_DELAY_MS:1000}
+    batch-size: ${DEADLINE_WATCHDOG_BATCH_SIZE:50}
   watchdog:
     enabled: ${LEASE_WATCHDOG_ENABLED:true}
   worker:
