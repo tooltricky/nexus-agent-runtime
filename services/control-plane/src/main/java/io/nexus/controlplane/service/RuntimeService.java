@@ -150,6 +150,7 @@ public class RuntimeService {
                 task.attempt(),
                 task.maxAttempts(),
                 task.nextAttemptAt(),
+                store.findPauseCheckpoint(task.id()).orElse(null),
                 task.createdAt(),
                 task.updatedAt()
         );

@@ -1,7 +1,7 @@
 # HTTP 与领域事件合约
 
 `openapi.yaml` 使用 OpenAPI 3.1（Schema Object 为 JSON Schema 2020-12）。当前 HTTP 合约版本为
-`0.3.0`；`openapi-v0.1.yaml`、`openapi-v0.2.yaml` 和对应事件 Schema 保留旧版定义。
+`0.4.0`；`openapi-v0.1.yaml`、`openapi-v0.2.yaml`、`openapi-v0.3.yaml` 和对应事件 Schema 保留旧版定义。
 
 创建 Run 的 `session_id` / `input` 必须是非空白字符串；空白按当前 Bean Validation 的
 `String.trim()` 语义判断（U+0000–U+0020），内容不做 trim。`Idempotency-Key` 必须提供，
@@ -53,11 +53,11 @@ Task 的 PENDING / LEASED / EXECUTING / RETRYING 可以进入 CANCELLED；终态
 取消事件使用 schema_version `0.2`，旧事件仍使用无版本的冻结 Schema。成功 GET Run / timeline
 和 POST cancel 带 `Nexus-API-Contract: 0.2`，不提供旧版响应协商。样本位于 `examples/`；
 取消成功响应要求 Run 与唯一 Task 均为 CANCELLED；取消冲突与幂等冲突使用不同的错误 Schema。
-取消可能等待正在执行的事务，不保证立即中断外部调用或撤销外部副作用。当前尚无心跳续租接口。
+取消可能等待正在执行的事务，不保证立即中断外部调用或撤销外部副作用。B07 已补充内部心跳续租（无公共续租 API）。
 
 ## B08：截止时间、TIMEOUT 与 0.3 版本
 
-当前成功 Run / timeline GET 及 cancel POST 响应带 `Nexus-API-Contract: 0.3`。
+B08 当时成功 Run / timeline GET 及 cancel POST 响应带 `Nexus-API-Contract: 0.3`。
 上述 B04 / B05 段落描述其历史 0.2 边界；冻结文件保留原样，不协商旧响应版本。
 
 创建请求新增可选 `deadline_at`：带时区偏移、包含秒且最多九位小数秒的时间字符串，支持 `Z` 及 `-23:59` 至 `+23:59` 的 RFC 3339 偏移（分钟 00–59）。省略或 null 表示无限期；查询在
@@ -78,3 +78,33 @@ Run 事件带关联 task_id。TaskRetrySkipped 原因是 DEADLINE_BEFORE_RETRY�
 DeadlineContractTest 和真实 HTTP / PostgreSQL 测试校验，并保留旧样本回归。
 校验器保留 date-time format assertion，单独校验完整 RFC 3339 偏移并用原库校验日历与本地时间，避免测试库内部 `OffsetDateTime` 的 ±18 小时限制缩窄公开范围；覆盖 `±19:00`、`±23:59` 正例及小时 24 / 分钟 60 反例。
 事务优先级、审批等待计时及中断边界见 [ADR 0007](../../docs/adr/0007-execution-deadlines.md)。
+
+## B09：PAUSED、checkpoint 与 0.4 版本
+
+当前 Run / timeline GET、cancel / pause / resume POST 成功响应带 `Nexus-API-Contract: 0.4`。
+`openapi-v0.3.yaml` 冻结 B08 的定义；不协商旧版响应。新增 `POST /v1/runs/{run_id}/pause`
+和 `/resume`，无需请求体或 Idempotency-Key，忽略请求体；200 返回当前 Run，404 表示不存在，
+409 `pause_conflict` 表示终态、到期或恢复时暂停编号不匹配。首次恢复时若已耗尽尝试次数，
+200 返回 FAILED；不增加一次执行。重复暂停（已 PAUSED）或恢复（仍活动）不追加事件。
+恢复的可选 `Pause-Checkpoint` 头必须与最新 checkpoint_id 相等；带头重试能防止误恢复新的
+暂停周期。不带头始终针对当前周期，跨周期迟到请求无去重保证。暂停在中间恢复后再次到达
+也属于新操作。新发现到期的调用先提交 TIMEOUT 再返回 409，暂停不停止截止时间计时。
+
+PAUSED 为非终态，Run 与 Task 一致；Task 必须有非空 `checkpoint`，不得有租约或 output。
+checkpoint 版本为整数 1，记录暂停周期 UUID、Run / Task ID、暂停前状态和版本、attempt、
+next_attempt_at、paused_at。被恢复 / 次数耗尽 / 取消 / 超时消费后，提供 consumed_at 与
+RESUMED / ATTEMPTS_EXHAUSTED / CANCELLED / TIMEOUT disposition；两字段同时出现。
+只有最新 checkpoint 保留为普通数据，旧周期见不可变时间线。其余状态允许省略 checkpoint；
+存在时必须已消费。字段关系与数据库一致性由集成测试补充验证。
+
+`events/domain-event-v0.4.schema.json` 只接受显式字符串 0.4：TaskPaused、RunPaused、
+TaskResumed、RunResumed、从 PAUSED 耗尽的 TaskFailed / RunFailed，以及从 PAUSED 取消 /
+超时的既有事件类型。新暂停 / 恢复与次数耗尽事件带 checkpoint_id、from / to；Task 事件
+有 attempt / max_attempts，Run 事件有关联 task_id。次数耗尽原因固定 PAUSED_ATTEMPTS_EXHAUSTED。
+从非 PAUSED 来源的取消 / 超时继续使用 0.2 / 0.3，旧事件和冻结 Schema 均不改写。
+无版本、0.2、0.3、0.4 混合读取；未知版本拒绝。新版示例位于
+`examples/run-paused-v0.4.json`、`examples/events-pause-v0.4.json`，由 PauseContractTest
+和 RunPauseIntegrationTest 验证正反例、真实 HTTP 和真实持久化事件。
+
+恢复只在未完成 Task 边界进行，不是线程或模型调用快照；尝试次数不退还，旧结果和旧停止
+通知不能影响恢复后的执行。事务与竞争规则见 [ADR 0008](../../docs/adr/0008-pause-and-resume.md)。

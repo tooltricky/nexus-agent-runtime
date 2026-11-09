@@ -23,7 +23,7 @@ public final class RuntimeTestSupport {
     private RuntimeTestSupport() { }
 
     public static void clearDatabase(JdbcTemplate jdbc) {
-        jdbc.execute("TRUNCATE domain_events, tasks, runs, sessions");
+        jdbc.execute("TRUNCATE task_pause_checkpoints, domain_events, tasks, runs, sessions");
     }
 
     public static FakeWorkerService worker(ApplicationContext context) {

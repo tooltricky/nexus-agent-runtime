@@ -11,6 +11,10 @@ from pathlib import Path
 
 # Keep this list in sync when adding or renaming a required test class.
 REQUIRED_SUITES = (
+    "io.nexus.controlplane.service.RunPauseIntegrationTest",
+    "io.nexus.controlplane.service.PauseSchedulingIntegrationTest",
+    "io.nexus.controlplane.service.PauseMigrationIntegrationTest",
+    "io.nexus.controlplane.contracts.PauseContractTest",
     "io.nexus.controlplane.service.ExecutionControlRegistryTest",
     "io.nexus.controlplane.service.DeadlineIntegrationTest",
     "io.nexus.controlplane.service.DeadlineSchedulingIntegrationTest",

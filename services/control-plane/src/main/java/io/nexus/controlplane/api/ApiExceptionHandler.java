@@ -3,6 +3,7 @@ package io.nexus.controlplane.api;
 import io.nexus.controlplane.api.ApiModels.ErrorResponse;
 import io.nexus.controlplane.service.ConflictException;
 import io.nexus.controlplane.service.CancellationConflictException;
+import io.nexus.controlplane.service.PauseConflictException;
 import io.nexus.controlplane.service.NotFoundException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
@@ -15,6 +16,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    @ExceptionHandler(PauseConflictException.class)
+    public ResponseEntity<ErrorResponse> pauseConflict(PauseConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse("pause_conflict", exception.getMessage()));
+    }
+
     @ExceptionHandler(CancellationConflictException.class)
     public ResponseEntity<ErrorResponse> cancellationConflict(CancellationConflictException exception) {
         return ResponseEntity.status(HttpStatus.CONFLICT)

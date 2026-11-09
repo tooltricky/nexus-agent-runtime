@@ -46,6 +46,12 @@ public final class Records {
 
     }
 
+    public record PauseCheckpointRecord(
+            int schemaVersion, String checkpointId, String taskId, String runId,
+            RunStatus runStatus, TaskStatus taskStatus, int attempt, long taskVersion, long runVersion,
+            Instant nextAttemptAt, Instant pausedAt, Instant consumedAt, String disposition
+    ) { }
+
     public record EventRecord(
             long sequence,
             String eventId,

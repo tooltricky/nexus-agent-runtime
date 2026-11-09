@@ -41,6 +41,19 @@ class TaskStatusTest {
         }
     }
 
+    @Test void pausePreservesUnfinishedWorkAndCanOnlyResumeAtTaskBoundary() {
+        for (TaskStatus state : java.util.List.of(TaskStatus.PENDING, TaskStatus.LEASED, TaskStatus.EXECUTING, TaskStatus.RETRYING)) {
+            assertDoesNotThrow(() -> state.requireTransitionTo(TaskStatus.PAUSED));
+        }
+        for (TaskStatus state : java.util.List.of(TaskStatus.PENDING, TaskStatus.RETRYING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMEOUT)) {
+            assertDoesNotThrow(() -> TaskStatus.PAUSED.requireTransitionTo(state));
+        }
+        for (TaskStatus state : java.util.List.of(TaskStatus.LEASED, TaskStatus.EXECUTING, TaskStatus.SUCCEEDED)) {
+            assertThrows(IllegalStateException.class, () -> TaskStatus.PAUSED.requireTransitionTo(state));
+        }
+        org.assertj.core.api.Assertions.assertThat(TaskStatus.PAUSED.isTerminal()).isFalse();
+    }
+
     @Test
     void everyTerminalStateRejectsAllFurtherTransitionsIncludingItself() {
         for (TaskStatus terminal : java.util.List.of(

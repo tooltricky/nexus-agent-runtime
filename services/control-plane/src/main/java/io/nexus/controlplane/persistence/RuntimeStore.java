@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.nexus.controlplane.domain.Records.EventRecord;
+import io.nexus.controlplane.domain.Records.PauseCheckpointRecord;
 import io.nexus.controlplane.domain.Records.RunRecord;
 import io.nexus.controlplane.domain.Records.SessionRecord;
 import io.nexus.controlplane.domain.Records.TaskRecord;
@@ -102,7 +103,7 @@ public class RuntimeStore {
 
     public List<TaskRecord> findDueTasksForUpdate(int batchSize) {
         return jdbc.query("""
-                SELECT * FROM tasks WHERE status IN ('PENDING','LEASED','EXECUTING','RETRYING')
+                SELECT * FROM tasks WHERE status IN ('PENDING','LEASED','EXECUTING','RETRYING','PAUSED')
                   AND deadline_at <= clock_timestamp()
                 ORDER BY deadline_at, id LIMIT ? FOR UPDATE SKIP LOCKED
                 """, this::mapTask, batchSize);
@@ -138,6 +139,60 @@ public class RuntimeStore {
         requireSingleUpdate(updated, "Task", task.id());
     }
 
+    public Optional<PauseCheckpointRecord> findPauseCheckpoint(String taskId) {
+        return queryOne("SELECT * FROM task_pause_checkpoints WHERE task_id = ?", this::mapCheckpoint, taskId);
+    }
+
+    /** Include consumed checkpoints so a rapid resume cannot conceal a committed pause. */
+    public List<PauseCheckpointRecord> findPauseCheckpoints(Set<String> taskIds) {
+        if (taskIds.isEmpty()) return List.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(taskIds.size(), "?"));
+        return jdbc.query("SELECT * FROM task_pause_checkpoints WHERE task_id IN (" + placeholders + ")",
+                this::mapCheckpoint, taskIds.toArray());
+    }
+
+    public PauseCheckpointRecord savePauseCheckpoint(TaskRecord task, RunRecord run, Instant now) {
+        return jdbc.queryForObject("""
+                INSERT INTO task_pause_checkpoints (task_id, run_id, checkpoint_id, schema_version,
+                    run_status, task_status, attempt, task_version, run_version, next_attempt_at, paused_at)
+                VALUES (?, ?, ?::uuid, 1, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (task_id) DO UPDATE SET checkpoint_id = EXCLUDED.checkpoint_id,
+                    run_status = EXCLUDED.run_status, task_status = EXCLUDED.task_status,
+                    attempt = EXCLUDED.attempt, task_version = EXCLUDED.task_version,
+                    run_version = EXCLUDED.run_version, next_attempt_at = EXCLUDED.next_attempt_at,
+                    paused_at = EXCLUDED.paused_at, consumed_at = NULL, disposition = NULL
+                RETURNING *
+                """, this::mapCheckpoint, task.id(), run.id(), java.util.UUID.randomUUID().toString(),
+                run.status().name(), task.status().name(), task.attempt(), task.version(), run.version(),
+                timestamp(task.nextAttemptAt()), timestamp(now));
+    }
+
+    public void consumePauseCheckpoint(TaskRecord task, String disposition) {
+        if (task.status() != TaskStatus.PAUSED) return;
+        requireSingleUpdate(jdbc.update("""
+                UPDATE task_pause_checkpoints SET consumed_at = clock_timestamp(), disposition = ?
+                WHERE task_id = ? AND consumed_at IS NULL
+                """, disposition, task.id()), "Checkpoint", task.id());
+    }
+
+    public void pauseTask(TaskRecord task) {
+        task.status().requireTransitionTo(TaskStatus.PAUSED);
+        requireSingleUpdate(jdbc.update("""
+                UPDATE tasks SET status = 'PAUSED', output = NULL, lease_owner = NULL, lease_expires_at = NULL,
+                    version = version + 1, updated_at = clock_timestamp()
+                WHERE id = ? AND status = ? AND version = ? AND attempt = ?
+                """, task.id(), task.status().name(), task.version(), task.attempt()), "Task", task.id());
+    }
+
+    public void resumeTask(TaskRecord task, TaskStatus next, Instant readyAt) {
+        task.status().requireTransitionTo(next);
+        requireSingleUpdate(jdbc.update("""
+                UPDATE tasks SET status = ?, next_attempt_at = ?, version = version + 1,
+                    updated_at = clock_timestamp()
+                WHERE id = ? AND status = 'PAUSED' AND version = ? AND attempt = ?
+                """, next.name(), timestamp(readyAt), task.id(), task.version(), task.attempt()), "Task", task.id());
+    }
+
     public record TaskClaim(TaskRecord task, TaskStatus previousStatus) {
     }
 
@@ -152,6 +207,7 @@ public class RuntimeStore {
                             SELECT id, status AS previous_status
                             FROM tasks
                             WHERE status IN ('PENDING', 'RETRYING')
+                              AND attempt < max_attempts
                               AND next_attempt_at <= clock_timestamp()
                               AND (deadline_at IS NULL OR deadline_at > clock_timestamp())
                             ORDER BY created_at, id
@@ -416,6 +472,14 @@ public class RuntimeStore {
                 instant(rs, "created_at"),
                 instant(rs, "updated_at")
         );
+    }
+
+    private PauseCheckpointRecord mapCheckpoint(ResultSet rs, int rowNum) throws SQLException {
+        return new PauseCheckpointRecord(rs.getInt("schema_version"), rs.getString("checkpoint_id"),
+                rs.getString("task_id"), rs.getString("run_id"), RunStatus.valueOf(rs.getString("run_status")),
+                TaskStatus.valueOf(rs.getString("task_status")), rs.getInt("attempt"), rs.getLong("task_version"),
+                rs.getLong("run_version"), instant(rs, "next_attempt_at"), instant(rs, "paused_at"),
+                instantOrNull(rs, "consumed_at"), rs.getString("disposition"));
     }
 
     private EventRecord mapEvent(ResultSet rs, int rowNum) throws SQLException {

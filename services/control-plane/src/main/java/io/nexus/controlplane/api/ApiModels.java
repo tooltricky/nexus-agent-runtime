@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.nexus.controlplane.domain.RunStatus;
 import io.nexus.controlplane.domain.TaskStatus;
+import io.nexus.controlplane.domain.Records.PauseCheckpointRecord;
 import jakarta.validation.constraints.NotBlank;
 
 import java.time.Instant;
@@ -37,6 +38,7 @@ public final class ApiModels {
             int attempt,
             int maxAttempts,
             Instant nextAttemptAt,
+            PauseCheckpointRecord checkpoint,
             Instant createdAt,
             Instant updatedAt
     ) {

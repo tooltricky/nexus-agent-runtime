@@ -44,14 +44,15 @@ public final class ContractAssertions {
     private static final JsonNode EVENT_SCHEMA = resource("events/domain-event.schema.json");
     private static final JsonNode NEW_EVENT_SCHEMA = resource("events/domain-event-v0.2.schema.json");
     private static final JsonNode TIMEOUT_EVENT_SCHEMA = resource("events/domain-event-v0.3.schema.json");
+    private static final JsonNode PAUSE_EVENT_SCHEMA = resource("events/domain-event-v0.4.schema.json");
     private static final JsonSchema LEGACY_EVENT = FACTORY.getSchema(EVENT_SCHEMA, CONFIG);
     private static final JsonSchema EVENT = FACTORY.getSchema(API.at("/components/schemas/DomainEvent"), CONFIG);
 
     private ContractAssertions() { }
 
     public static void response(String path, String method, ResponseEntity<JsonNode> response) {
-        if ((method.equals("get") || path.endsWith("/cancel")) && response.getStatusCode().is2xxSuccessful()) {
-            assertThat(response.getHeaders().getFirst("Nexus-API-Contract")).isEqualTo("0.3");
+        if ((method.equals("get") || path.endsWith("/cancel") || path.endsWith("/pause") || path.endsWith("/resume")) && response.getStatusCode().is2xxSuccessful()) {
+            assertThat(response.getHeaders().getFirst("Nexus-API-Contract")).isEqualTo("0.4");
         }
         assertThat(response.getHeaders().getContentType()).isNotNull()
                 .satisfies(type -> assertThat(type.isCompatibleWith(MediaType.APPLICATION_JSON)).isTrue());
@@ -104,6 +105,7 @@ public final class ContractAssertions {
         JsonNode required = EVENT_SCHEMA.path("$defs").path(eventType).path("required");
         if (required.isMissingNode()) required = NEW_EVENT_SCHEMA.path("$defs").path(eventType).path("required");
         if (required.isMissingNode()) required = TIMEOUT_EVENT_SCHEMA.path("$defs").path(eventType).path("required");
+        if (required.isMissingNode()) required = PAUSE_EVENT_SCHEMA.path("$defs").path(eventType).path("required");
         assertThat(required.isArray()).as("documented event type %s", eventType).isTrue();
         return requiredFields(required);
     }

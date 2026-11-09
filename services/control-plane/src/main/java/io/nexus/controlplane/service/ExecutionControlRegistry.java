@@ -1,6 +1,7 @@
 package io.nexus.controlplane.service;
 
 import io.nexus.controlplane.domain.Records.TaskRecord;
+import io.nexus.controlplane.domain.Records.PauseCheckpointRecord;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Component;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +33,16 @@ public class ExecutionControlRegistry {
             // Lease loss may leave older executors running after a newer attempt takes over.
             // Bound the notification so a stale callback cannot stop a newer attempt.
             if (key.taskId().equals(task.id()) && key.attempt() <= task.attempt()) signal.requestStop();
+        });
+    }
+
+    public void stopPaused(PauseCheckpointRecord checkpoint) {
+        heartbeats.stopThroughFence(checkpoint.taskId(), checkpoint.attempt(), checkpoint.taskVersion());
+        active.forEach((key, signal) -> {
+            if (key.taskId().equals(checkpoint.taskId()) && (key.attempt() < checkpoint.attempt()
+                    || (key.attempt() == checkpoint.attempt() && key.version() <= checkpoint.taskVersion()))) {
+                signal.requestStop();
+            }
         });
     }
 

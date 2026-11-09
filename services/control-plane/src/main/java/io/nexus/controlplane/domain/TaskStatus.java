@@ -9,16 +9,18 @@ public enum TaskStatus {
     LEASED,
     EXECUTING,
     RETRYING,
+    PAUSED,
     SUCCEEDED,
     FAILED,
     CANCELLED,
     TIMEOUT;
 
     private static final Map<TaskStatus, Set<TaskStatus>> TRANSITIONS = Map.of(
-            PENDING, EnumSet.of(LEASED, CANCELLED, TIMEOUT),
-            LEASED, EnumSet.of(EXECUTING, RETRYING, FAILED, CANCELLED, TIMEOUT),
-            EXECUTING, EnumSet.of(RETRYING, SUCCEEDED, FAILED, CANCELLED, TIMEOUT),
-            RETRYING, EnumSet.of(LEASED, CANCELLED, TIMEOUT),
+            PENDING, EnumSet.of(LEASED, PAUSED, CANCELLED, TIMEOUT),
+            LEASED, EnumSet.of(EXECUTING, RETRYING, PAUSED, FAILED, CANCELLED, TIMEOUT),
+            EXECUTING, EnumSet.of(RETRYING, PAUSED, SUCCEEDED, FAILED, CANCELLED, TIMEOUT),
+            RETRYING, EnumSet.of(LEASED, PAUSED, CANCELLED, TIMEOUT),
+            PAUSED, EnumSet.of(PENDING, RETRYING, FAILED, CANCELLED, TIMEOUT),
             SUCCEEDED, EnumSet.noneOf(TaskStatus.class),
             FAILED, EnumSet.noneOf(TaskStatus.class),
             CANCELLED, EnumSet.noneOf(TaskStatus.class),

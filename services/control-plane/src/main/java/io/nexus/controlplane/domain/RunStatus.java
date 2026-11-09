@@ -8,6 +8,7 @@ public enum RunStatus {
     CREATED,
     QUEUED,
     RUNNING,
+    PAUSED,
     SUCCEEDED,
     FAILED,
     CANCELLED,
@@ -15,8 +16,9 @@ public enum RunStatus {
 
     private static final Map<RunStatus, Set<RunStatus>> TRANSITIONS = Map.of(
             CREATED, EnumSet.of(QUEUED, CANCELLED, TIMEOUT),
-            QUEUED, EnumSet.of(RUNNING, CANCELLED, TIMEOUT),
-            RUNNING, EnumSet.of(SUCCEEDED, FAILED, CANCELLED, TIMEOUT),
+            QUEUED, EnumSet.of(RUNNING, PAUSED, CANCELLED, TIMEOUT),
+            RUNNING, EnumSet.of(PAUSED, SUCCEEDED, FAILED, CANCELLED, TIMEOUT),
+            PAUSED, EnumSet.of(QUEUED, RUNNING, FAILED, CANCELLED, TIMEOUT),
             SUCCEEDED, EnumSet.noneOf(RunStatus.class),
             FAILED, EnumSet.noneOf(RunStatus.class),
             CANCELLED, EnumSet.noneOf(RunStatus.class),

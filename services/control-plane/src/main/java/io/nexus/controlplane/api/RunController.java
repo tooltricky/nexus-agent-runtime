@@ -6,6 +6,7 @@ import io.nexus.controlplane.api.ApiModels.RunResponse;
 import io.nexus.controlplane.api.ApiModels.TimelineResponse;
 import io.nexus.controlplane.service.RuntimeService;
 import io.nexus.controlplane.service.RunCancellationService;
+import io.nexus.controlplane.service.RunPauseService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -27,10 +28,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class RunController {
     private final RuntimeService runtimeService;
     private final RunCancellationService cancellations;
+    private final RunPauseService pauses;
 
-    public RunController(RuntimeService runtimeService, RunCancellationService cancellations) {
+    public RunController(RuntimeService runtimeService, RunCancellationService cancellations, RunPauseService pauses) {
         this.runtimeService = runtimeService;
         this.cancellations = cancellations;
+        this.pauses = pauses;
     }
 
     @PostMapping
@@ -44,16 +47,27 @@ public class RunController {
 
     @GetMapping("/{runId}")
     public ResponseEntity<RunResponse> getRun(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.3").body(runtimeService.getRun(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(runtimeService.getRun(runId));
     }
 
     @PostMapping("/{runId}/cancel")
     public ResponseEntity<RunResponse> cancelRun(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.3").body(cancellations.cancel(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(cancellations.cancel(runId));
+    }
+
+    @PostMapping("/{runId}/pause")
+    public ResponseEntity<RunResponse> pauseRun(@PathVariable String runId) {
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(pauses.pause(runId));
+    }
+
+    @PostMapping("/{runId}/resume")
+    public ResponseEntity<RunResponse> resumeRun(@PathVariable String runId,
+            @RequestHeader(value = "Pause-Checkpoint", required = false) String checkpointId) {
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(pauses.resume(runId, checkpointId));
     }
 
     @GetMapping("/{runId}/timeline")
     public ResponseEntity<TimelineResponse> getTimeline(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.3").body(runtimeService.getTimeline(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(runtimeService.getTimeline(runId));
     }
 }

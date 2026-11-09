@@ -46,17 +46,19 @@ public class RunCancellationService {
         if (timeouts.expireLocked(task, run, store.currentTime())) {
             throw new CancellationConflictException("Timed-out Run cannot be cancelled: " + runId);
         }
+        String schemaVersion = task.status() == TaskStatus.PAUSED ? "0.4" : "0.2";
+        store.consumePauseCheckpoint(task, "CANCELLED");
         store.cancelTask(task);
         store.transitionRun(run, RunStatus.CANCELLED, null);
         store.appendVersionedEvent(Ids.eventId(), "TASK", task.id(), runId, task.id(), "TaskCancelled",
                 mapper.createObjectNode()
                         .put("from", task.status().name()).put("to", "CANCELLED")
                         .put("reason", "USER_REQUESTED")
-                        .put("attempt", task.attempt()).put("max_attempts", task.maxAttempts()), "0.2");
+                        .put("attempt", task.attempt()).put("max_attempts", task.maxAttempts()), schemaVersion);
         store.appendVersionedEvent(Ids.eventId(), "RUN", runId, runId, null, "RunCancelled",
                 mapper.createObjectNode()
                         .put("from", run.status().name()).put("to", "CANCELLED")
-                        .put("reason", "USER_REQUESTED").put("task_id", task.id()), "0.2");
+                        .put("reason", "USER_REQUESTED").put("task_id", task.id()), schemaVersion);
         return runtime.getRun(runId);
     }
 }

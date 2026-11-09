@@ -77,6 +77,12 @@ class CancellationContractTest {
                     : java.util.Arrays.stream(RunStatus.values()).map(Enum::name).toList();
             for (String source : states) {
                 ((ObjectNode) event.path("payload")).put("from", source);
+                event.put("schema_version", "0.2");
+                if (source.equals("PAUSED")) {
+                    // The old schema stays frozen; only the new origin uses revision 0.4.
+                    assertThat(ContractAssertions.eventErrors(event)).isNotEmpty();
+                    event.put("schema_version", "0.4");
+                }
                 boolean terminal = List.of("SUCCEEDED", "FAILED", "CANCELLED", "TIMEOUT").contains(source);
                 assertThat(ContractAssertions.eventErrors(event).isEmpty()).as(type + " from " + source).isEqualTo(!terminal);
             }

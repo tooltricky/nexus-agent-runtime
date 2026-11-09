@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: Nexus Agent Runtime API
-  version: 0.3.0
+  version: 0.4.0
   description: >-
-    Contract revision 0.3 for the /v1 API. Successful Run/timeline GET and cancel POST
-    responses identify this revision with Nexus-API-Contract: 0.3. Clients must
-    understand TIMEOUT and mixed 0.1/0.2/0.3 event versions before deadline processing is enabled.
+    Contract revision 0.4 for the /v1 API. Successful Run/timeline GET and cancel/pause/resume POST
+    responses identify this revision with Nexus-API-Contract: 0.4. Clients must
+    understand PAUSED and mixed 0.1/0.2/0.3/0.4 event versions before pause/resume is enabled.
 servers:
   - url: http://localhost:8080
 paths:
@@ -66,7 +66,7 @@ paths:
               description: Explicit representation revision; no legacy negotiation is supported.
               required: true
               schema:
-                const: "0.3"
+                const: "0.4"
           content:
             application/json:
               schema:
@@ -81,7 +81,7 @@ paths:
       summary: Atomically cancel a Run and its unfinished Task
       description: >-
         No request body or Idempotency-Key is required; the body is ignored. Cancels
-        QUEUED/RUNNING Runs, including leased, executing, and retrying Tasks.
+        QUEUED/RUNNING/PAUSED Runs, including leased, executing, and retrying Tasks.
         Repeating cancellation succeeds without changing state or appending events.
         Completed Runs reject cancellation. If expiry is discovered here, TIMEOUT
         is committed before returning 409. Locked eligibility checks before deadline
@@ -96,7 +96,7 @@ paths:
               description: Explicit representation revision; no legacy negotiation is supported.
               required: true
               schema:
-                const: "0.3"
+                const: "0.4"
           content:
             application/json:
               schema:
@@ -118,6 +118,67 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CancellationConflictError"
+  /v1/runs/{run_id}/pause:
+    parameters:
+    - $ref: '#/components/parameters/RunId'
+    post:
+      operationId: pauseRun
+      summary: Pause unfinished work with a durable checkpoint
+      description: No body or Idempotency-Key required; body is ignored. Pause revokes the current lease and results, then cooperatively stops old executions after commit. Repeated pause while PAUSED is a no-op. A pause arriving after an intervening resume is a new pause request. Deadline continues while paused; discovering expiry commits TIMEOUT before 409. Terminal states reject either operation.
+      responses:
+        '200':
+          description: Current Run after the operation or an unchanged repeat
+          headers:
+            Nexus-API-Contract:
+              required: true
+              schema:
+                const: '0.4'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Terminal Run, expired deadline, or mismatched Pause-Checkpoint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PauseConflictError'
+  /v1/runs/{run_id}/resume:
+    parameters:
+    - $ref: '#/components/parameters/RunId'
+    post:
+      operationId: resumeRun
+      summary: Resume only unfinished work from the latest checkpoint
+      description: No body or Idempotency-Key required; body is ignored. Optional Pause-Checkpoint binds a retry to that cycle; mismatches conflict. Without it a delayed request may target a later pause. Repeated resume while active is a no-op. Interrupted Task restarts from its beginning on a new attempt; already consumed attempts are not refunded. If exhausted, return 200 FAILED without execution. Deadline continues while paused; discovering expiry commits TIMEOUT before 409. Terminal states reject either operation.
+      responses:
+        '200':
+          description: Current Run after the operation or an unchanged repeat
+          headers:
+            Nexus-API-Contract:
+              required: true
+              schema:
+                const: '0.4'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Terminal Run, expired deadline, or mismatched Pause-Checkpoint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PauseConflictError'
+      parameters:
+      - name: Pause-Checkpoint
+        in: header
+        required: false
+        description: Opaque latest checkpoint_id; equality checked, including on active-state repeats.
+        schema:
+          type: string
   /v1/runs/{run_id}/timeline:
     parameters:
       - $ref: "#/components/parameters/RunId"
@@ -132,7 +193,7 @@ paths:
               description: Explicit representation revision; no legacy negotiation is supported.
               required: true
               schema:
-                const: "0.3"
+                const: "0.4"
           content:
             application/json:
               schema:
@@ -206,14 +267,28 @@ components:
           type: string
     RunStatus:
       type: string
-      enum: [CREATED, QUEUED, RUNNING, SUCCEEDED, FAILED, CANCELLED, TIMEOUT]
+      enum: [CREATED, QUEUED, RUNNING, PAUSED, SUCCEEDED, FAILED, CANCELLED, TIMEOUT]
     TaskStatus:
       type: string
-      enum: [PENDING, LEASED, EXECUTING, RETRYING, SUCCEEDED, FAILED, CANCELLED, TIMEOUT]
+      enum: [PENDING, LEASED, EXECUTING, RETRYING, PAUSED, SUCCEEDED, FAILED, CANCELLED, TIMEOUT]
     Task:
       type: object
       required: [task_id, name, status, input, attempt, max_attempts, next_attempt_at, created_at, updated_at]
       allOf:
+        - if:
+            properties:
+              status: {const: PAUSED}
+          then:
+            required: [checkpoint]
+            properties:
+              checkpoint:
+                properties:
+                  consumed_at: false
+                  disposition: false
+          else:
+            properties:
+              checkpoint:
+                required: [consumed_at, disposition]
         - if:
             properties:
               status:
@@ -250,6 +325,8 @@ components:
                 - required: [lease_owner]
                 - required: [lease_expires_at]
       properties:
+        checkpoint:
+          $ref: "#/components/schemas/PauseCheckpoint"
         task_id:
           type: string
         name:
@@ -297,6 +374,15 @@ components:
       type: object
       required: [run_id, session_id, input, status, tasks, created_at, updated_at]
       allOf:
+        - if:
+            properties:
+              status: {const: PAUSED}
+          then:
+            properties:
+              tasks:
+                items:
+                  properties:
+                    status: {const: PAUSED}
         - if:
             properties:
               status:
@@ -347,6 +433,69 @@ components:
           description: Persisted absolute deadline, omitted when unlimited. Normally rendered in UTC; boundary instants in UTC year 0000 or 10000 use +23:59 or -23:59 to keep a four-digit local year. Task and Run share this value.
           type: string
           format: date-time
+    PauseCheckpoint:
+      type: object
+      required:
+      - schema_version
+      - checkpoint_id
+      - task_id
+      - run_id
+      - run_status
+      - task_status
+      - attempt
+      - task_version
+      - run_version
+      - next_attempt_at
+      - paused_at
+      properties:
+        schema_version:
+          const: 1
+        checkpoint_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+        run_id:
+          type: string
+        run_status:
+          enum:
+          - QUEUED
+          - RUNNING
+        task_status:
+          enum:
+          - PENDING
+          - LEASED
+          - EXECUTING
+          - RETRYING
+        attempt:
+          type: integer
+          minimum: 0
+        task_version:
+          type: integer
+          minimum: 0
+        run_version:
+          type: integer
+          minimum: 0
+        next_attempt_at:
+          type: string
+          format: date-time
+        paused_at:
+          type: string
+          format: date-time
+        consumed_at:
+          type: string
+          format: date-time
+        disposition:
+          enum:
+          - RESUMED
+          - ATTEMPTS_EXHAUSTED
+          - CANCELLED
+          - TIMEOUT
+      dependentRequired:
+        consumed_at:
+        - disposition
+        disposition:
+        - consumed_at
     Output:
       type: object
       required: [summary]
@@ -354,13 +503,14 @@ components:
         summary:
           type: string
     DomainEvent:
-      description: No schema_version selects frozen 0.1; explicit 0.2 or 0.3 selects its schema. Unknown versions are rejected.
+      description: No schema_version selects frozen 0.1; explicit 0.2, 0.3 or 0.4 selects its schema. Unknown versions are rejected.
       if:
         required: [schema_version]
       then:
         oneOf:
           - $ref: "./events/domain-event-v0.2.schema.json"
           - $ref: "./events/domain-event-v0.3.schema.json"
+          - $ref: "./events/domain-event-v0.4.schema.json"
       else:
         $ref: "./events/domain-event.schema.json"
     Timeline:
@@ -379,7 +529,7 @@ components:
       properties:
         code:
           type: string
-          enum: [invalid_request, not_found, idempotency_conflict, cancellation_conflict]
+          enum: [invalid_request, not_found, idempotency_conflict, cancellation_conflict, pause_conflict]
         message:
           type: string
     InvalidRequestError:
@@ -406,3 +556,9 @@ components:
         - properties:
             code:
               const: cancellation_conflict
+    PauseConflictError:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - properties:
+            code:
+              const: pause_conflict

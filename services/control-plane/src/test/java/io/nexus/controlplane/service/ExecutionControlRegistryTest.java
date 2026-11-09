@@ -43,6 +43,57 @@ class ExecutionControlRegistryTest {
         } finally { controls.close(); Thread.interrupted(); }
     }
 
+    @Test void pauseFenceStopsOlderAttemptAndVersionButNotReplacementOrOtherTask() {
+        var heartbeats = new LeaseHeartbeatService(mock(WorkerTransactionService.class));
+        var controls = new ExecutionControlRegistry(heartbeats);
+        var old = task(1); var sameAttempt = withVersion(old, old.version() + 1); var newer = task(2);
+        var other = task("other", 1);
+        var cp = checkpoint(old);
+        heartbeats.track(old, old.leaseOwner(), java.time.Duration.ofSeconds(30));
+        heartbeats.track(sameAttempt, sameAttempt.leaseOwner(), java.time.Duration.ofSeconds(30));
+        heartbeats.track(newer, newer.leaseOwner(), java.time.Duration.ofSeconds(30));
+        try (var first = controls.register(old); var replacement = controls.register(sameAttempt);
+             var next = controls.register(newer); var unrelated = controls.register(other)) {
+            controls.stopPaused(cp);
+            assertThat(first.isStopRequested()).isTrue();
+            assertThat(replacement.isStopRequested()).isFalse();
+            assertThat(next.isStopRequested()).isFalse();
+            assertThat(unrelated.isStopRequested()).isFalse();
+            assertThat(heartbeats.activeCount()).isEqualTo(2);
+            Thread.interrupted(); controls.stopPaused(cp);
+            assertThat(Thread.currentThread().isInterrupted()).isFalse();
+        } finally { controls.close(); heartbeats.close(); Thread.interrupted(); }
+    }
+
+    @Test void pauseMonitorRetriesReadFailuresAndUsesConsumedCheckpointsInBoundedBatches() {
+        var controls = new ExecutionControlRegistry(mock(LeaseHeartbeatService.class));
+        var store = mock(RuntimeStore.class);
+        var monitor = new ExecutionPauseMonitor(store, controls, new TimeoutConfiguration(100, 1));
+        var old = task(1); var next = task(2); var other = task("other", 1);
+        try (var first = controls.register(old); var replacement = controls.register(next); var unrelated = controls.register(other)) {
+            when(store.findPauseCheckpoints(anySet())).thenThrow(new org.springframework.dao.DataAccessResourceFailureException("unavailable"));
+            assertThrows(org.springframework.dao.DataAccessResourceFailureException.class, monitor::reconcile);
+            assertThat(first.isStopRequested()).isFalse();
+            doReturn(java.util.List.of(checkpoint(old))).when(store).findPauseCheckpoints(java.util.Set.of("task"));
+            doReturn(java.util.List.of()).when(store).findPauseCheckpoints(java.util.Set.of("other"));
+            clearInvocations(store); monitor.reconcile();
+            verify(store).findPauseCheckpoints(java.util.Set.of("task"));
+            verify(store).findPauseCheckpoints(java.util.Set.of("other")); verifyNoMoreInteractions(store);
+            assertThat(first.isStopRequested()).isTrue();
+            assertThat(replacement.isStopRequested()).isFalse(); assertThat(unrelated.isStopRequested()).isFalse();
+        } finally { controls.close(); Thread.interrupted(); }
+    }
+
+    private io.nexus.controlplane.domain.Records.PauseCheckpointRecord checkpoint(TaskRecord task) {
+        return new io.nexus.controlplane.domain.Records.PauseCheckpointRecord(1, java.util.UUID.randomUUID().toString(),
+                task.id(), task.runId(), io.nexus.controlplane.domain.RunStatus.RUNNING, task.status(), task.attempt(),
+                task.version(), 1, task.nextAttemptAt(), task.createdAt(), task.updatedAt(), "RESUMED");
+    }
+    private TaskRecord withVersion(TaskRecord t, long version) {
+        return new TaskRecord(t.id(), t.runId(), t.name(), t.deadlineAt(), t.status(), t.input(), t.output(),
+                t.leaseOwner(), t.leaseExpiresAt(), t.attempt(), t.maxAttempts(), t.nextAttemptAt(), version, t.createdAt(), t.updatedAt());
+    }
+
     @Test void timeoutStopsAllOutstandingAttemptsThroughCurrentAttempt() {
         var heartbeats = new LeaseHeartbeatService(mock(WorkerTransactionService.class));
         var controls = new ExecutionControlRegistry(heartbeats);

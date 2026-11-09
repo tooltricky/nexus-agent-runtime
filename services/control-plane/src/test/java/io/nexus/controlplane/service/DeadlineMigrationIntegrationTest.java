@@ -40,7 +40,7 @@ class DeadlineMigrationIntegrationTest {
                 var runs=jdbc.queryForList("SELECT to_jsonb(r)::text AS row FROM runs r ORDER BY id");
                 var tasks=jdbc.queryForList("SELECT to_jsonb(t)::text AS row FROM tasks t ORDER BY id");
                 var events=jdbc.queryForList("SELECT to_jsonb(e)::text AS row FROM domain_events e ORDER BY sequence");
-                var flyway=Flyway.configure().dataSource(source).schemas(schema).defaultSchema(schema).load();
+                var flyway=Flyway.configure().dataSource(source).schemas(schema).defaultSchema(schema).target("5").load();
                 assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1); flyway.validate();
                 assertThat(jdbc.queryForList("SELECT (to_jsonb(r)-'deadline_at')::text AS row FROM runs r ORDER BY id")).isEqualTo(runs);
                 assertThat(jdbc.queryForList("SELECT (to_jsonb(t)-'deadline_at')::text AS row FROM tasks t ORDER BY id")).isEqualTo(tasks);

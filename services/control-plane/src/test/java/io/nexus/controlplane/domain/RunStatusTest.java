@@ -33,6 +33,19 @@ class RunStatusTest {
         }
     }
 
+    @Test void pauseResumesOnlyToUnfinishedStatesAndStillAllowsTermination() {
+        for (RunStatus state : java.util.List.of(RunStatus.QUEUED, RunStatus.RUNNING)) {
+            assertDoesNotThrow(() -> state.requireTransitionTo(RunStatus.PAUSED));
+            assertDoesNotThrow(() -> RunStatus.PAUSED.requireTransitionTo(state));
+        }
+        for (RunStatus state : java.util.List.of(RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.TIMEOUT)) {
+            assertDoesNotThrow(() -> RunStatus.PAUSED.requireTransitionTo(state));
+        }
+        assertThrows(IllegalStateException.class, () -> RunStatus.PAUSED.requireTransitionTo(RunStatus.SUCCEEDED));
+        assertThrows(IllegalStateException.class, () -> RunStatus.CREATED.requireTransitionTo(RunStatus.PAUSED));
+        org.assertj.core.api.Assertions.assertThat(RunStatus.PAUSED.isTerminal()).isFalse();
+    }
+
     @Test
     void everyTerminalStateRejectsAllFurtherTransitionsIncludingItself() {
         for (RunStatus terminal : java.util.List.of(

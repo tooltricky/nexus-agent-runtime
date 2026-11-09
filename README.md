@@ -10,6 +10,7 @@ Nexus Agent Runtime 的可运行纵向切片：创建 Session 和幂等 Run，�
 - 基于真实 Task Lease 的数据库任务领取和可重启 fake worker
 - 独立心跳续租与租约 / 心跳配置的启动校验
 - 持久化截止时间、原子 TIMEOUT、独立超时扫描与协作式执行中断
+- 持久化 PAUSED、暂停 / 恢复接口与 Task 边界 checkpoint
 - 持久化 `RETRYING`、指数退避和 Task/Run 原子失败
 - append-only `domain_events` 时间线
 - OpenAPI 3.1 / JSON Schema 2020-12 合约及真实 HTTP / 事件自动验证
@@ -140,7 +141,7 @@ worker 会先预留执行名额再领取任务，执行线程池不保留等待�
 再次进入执行器，必须先由 watchdog 回收。
 
 B05 复用 B04 的 V4 迁移，无新增迁移，V1–V4 未改动；历史事件不回填 schema_version。
-Run / timeline 成功查询及取消成功响应在 B08 后带 `Nexus-API-Contract: 0.3`。旧 HTTP 定义保存在
+Run / timeline 成功查询及取消成功响应在 B09 后带 `Nexus-API-Contract: 0.4`。旧 HTTP 定义保存在
 `packages/contracts/openapi-v0.1.yaml`，实际取消事件带 `schema_version: "0.2"`，其他既有事件
 仍省略版本。启用取消前，客户端须先支持 CANCELLED 和混合版本事件。
 
@@ -222,10 +223,57 @@ B08 已增加截止时间 / TIMEOUT，规则见下文。心跳实现规则见 [A
 执行器可能继续占用线程，其迟到结果仍被拒绝。不能保证立即停止已发出的外部请求或撤销
 已发生的副作用。具体事务判定点、中断和重试规则见 [ADR 0007](docs/adr/0007-execution-deadlines.md)。
 
-B08 使用 V5 升级，V1–V4 不变，历史事件不回填。HTTP Run / timeline / cancel 成功响应使用
+B08 使用 V5 升级，V1–V4 不变，历史事件不回填。B08 当时的 HTTP Run / timeline / cancel 成功响应使用
 `Nexus-API-Contract: 0.3`，冻结的 0.2 定义保存在 `packages/contracts/openapi-v0.2.yaml`；
 新超时和跳过重试事件使用 `schema_version: "0.3"`，取消事件仍为 0.2，既有事件仍无版本。
-部署写入端前，客户端须支持 TIMEOUT 和三种事件版本。
+B09 的当前版本与兼容要求见下节。
+
+## 暂停 / 恢复（B09）
+
+```bash
+curl -i -X POST http://localhost:8080/v1/runs/<run_id>/pause
+curl -sS http://localhost:8080/v1/runs/<run_id>
+curl -i -X POST http://localhost:8080/v1/runs/<run_id>/resume \
+  -H 'Pause-Checkpoint: <tasks[0].checkpoint.checkpoint_id>'
+```
+
+请替换 Run ID 和查询返回的 checkpoint_id。两个接口都不要求请求体或 Idempotency-Key，
+请求体忽略。排队、已领取、执行中、等待重试都能暂停；成功返回 200，Run / Task 都为
+PAUSED，租约清空。查询 Task 的 checkpoint 可看到暂停周期、暂停前状态、已耗 attempt、
+状态版本、原重试时间和暂停时间。输入沿用原 Task，未完成输出不保存，成功 Task 不重跑。
+同一 Task 只保留最新一次 checkpoint，历史暂停周期及决定保存在不可变事件中。
+
+恢复后只调度尚未完成的 Task：原排队任务重新排队，原 RETRYING 保留绝对 next_attempt_at，
+到点才可领取；原 LEASED / EXECUTING 从整个 Task 开头重做，下一次领取消耗新 attempt。
+暂停 / 恢复本身不增加 attempt，也不退还已耗次数。被中断 attempt 已耗尽 max_attempts 时，
+恢复返回 200 和 FAILED，不发起额外执行；checkpoint 的 disposition 为 ATTEMPTS_EXHAUSTED。
+其他正常恢复标记 RESUMED 和 consumed_at。没有步骤级恢复或外部操作撤销能力。
+
+已经 PAUSED 时重复暂停、活动状态下重复恢复，返回 200 且不改变版本或追加事件。
+不存在返回 404；已成功 / 失败 / 取消 / 超时返回 409 pause_conflict。可选的 Pause-Checkpoint
+只允许恢复匹配的最新暂停周期，不匹配返回 409；它也适用于该周期已恢复但仍活动时的重试。
+不带此头的恢复总是针对当前周期，因此上一轮迟到请求可能恢复新一轮暂停；需要跨周期重试
+隔离的客户端应保存并发送该编号。暂停请求在中间发生过恢复后再到达，视为新的暂停请求。
+该编号用于匹配进度，不是身份凭证。fake executor 通常很快完成，暂停已成功 Run 得到 409
+属于正常情况，可使用关闭 worker 的环境先创建并暂停排队任务。
+
+暂停不延长 deadline_at，暂停期间可以取消或到期为 TIMEOUT。暂停 / 恢复首次发现到期时，
+先提交超时状态和事件再返回 409；恢复不能复活已终止的工作。状态、checkpoint、租约、
+版本及 TaskPaused → RunPaused / TaskResumed → RunResumed 在同一短事务内保存，失败全部
+回滚；次数耗尽恢复直接记录 TaskFailed → RunFailed，不记录虚假的恢复事件。
+
+暂停提交后按旧 attempt / version 发送协作式停止，清理旧心跳；各实例还会按
+DEADLINE_WATCHDOG_POLL_DELAY_MS / BATCH_SIZE 核对本机正在执行 Task 的持久化暂停记录，
+即使另一实例已快速暂停再恢复、心跳已移除或本机关闭超时写入扫描，也能补发旧执行的停止。
+这项读取不等待任务行锁，数据库读取失败保留注册下轮再查。旧通知不能误停新 attempt；
+忽略中断的执行器会继续占用名额直到退出，迟到结果被拒绝，不能撤销已发生的外部副作用。
+重启后仍为 PAUSED，不会自动执行；完整规则见 [ADR 0008](docs/adr/0008-pause-and-resume.md)。
+
+V6 增加 checkpoint 与 PAUSED 数据约束，并扩展暂停任务的超时扫描索引，V1–V5 不改动。
+当前 Run / timeline 查询及 cancel / pause / resume 成功响应带 Nexus-API-Contract: 0.4，
+冻结的 0.3 定义为 packages/contracts/openapi-v0.3.yaml。暂停 / 恢复、次数耗尽恢复和从
+PAUSED 取消 / 超时的事件使用 0.4；其他来源继续原来的事件版本，历史事件保持不变。
+部署前客户端须支持 PAUSED 和混合 0.1 / 0.2 / 0.3 / 0.4 事件。
 
 ## 测试
 
@@ -251,7 +299,7 @@ docker compose -f deploy/docker-compose.test.yml down
 
 测试覆盖如下场景：
 
-- 真实 HTTP 服务的五个接口、固定成功输出、完整有序时间线、请求校验和 400 / 404 / 409 错误码。
+- 真实 HTTP 服务的七个接口、固定成功输出、完整有序时间线、请求校验和 400 / 404 / 409 错误码。
 - 顺序和并发幂等创建；同键不同 input 或有效 Session 的竞争只保留一个 Run / Task 和一组创建事件。
 - 多个独立 worker 通过独立事务竞争单个或多个 Task，每个 Task 只领取一次，完成后不再执行。
 - 关闭并重建整个 Spring 应用上下文及连接池后，成功结果和事件保持不变，定时 worker 继续处理排队任务；
@@ -273,6 +321,12 @@ B08 另覆盖四个阶段超时、独立扫描、退避跨截止时间、数据�
 完整应用重启、执行池满时排队超时，以及响应 / 忽略中断的受控执行器。审查回归还覆盖租约接管后同时中断新旧 attempt、释放两个执行名额，以及完整 RFC 3339 偏移范围的 HTTP 规范化与幂等重放。
 另用两个独立应用上下文共享测试数据库，验证其他实例提交超时后的本机停止、移除心跳后仍能停止、回滚不误中断及执行名额复用。
 HTTP 偏移正例按数据库当前时间生成未来期限；年份边界另验证 UTC 跨界、持久化和查询表示。
+
+B09 另覆盖四个阶段暂停 / 恢复、重复和并发请求、暂停周期匹配、原退避和尝试上限、暂停中
+取消 / 超时、checkpoint 和两条事件故障回滚、与各状态写入者两种顺序的竞争及锁等待跨期限。
+使用真实应用重启、定时 worker、可控阻塞执行器及两个共享独立 PostgreSQL 的应用实例，
+验证快速恢复后旧通知不误停新 attempt、无心跳时停止、回滚不误中断、不响应中断的迟到结果，
+以及 V5 → V6 升级、数据库约束和 0.4 合约正反例。
 
 HTTP 回归测试为避免后台调度干扰并发创建断言，禁用定时 worker，通过独立事务主动推进真实 fake worker；
 重启测试另行启用真实定时 worker 验证自动执行。租约和退避测试直接调整独立测试库的时间字段，避免长时间等待。
@@ -305,7 +359,7 @@ Docker 构建上下文也使用仓库根目录。
 集成测试仍串行运行，避免共享清表互相干扰。
 
 每次 CI 使用新 runner 的工作区，不复用旧测试报告。Maven 返回成功后仍要检查 Surefire XML：
-所有 20 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
+所有 24 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
 不一致的计数或损坏内容都会使 CI 失败。新增或重命名测试类时，同步维护
 `scripts/check-test-reports.py` 的 `REQUIRED_SUITES`；发现的其他测试类也接受同样检查。
 所以即使漏配 `TEST_DB_URL` 导致 Maven 跳过集成测试，整次 CI 也不会显示成功。
@@ -350,4 +404,5 @@ nexus-agent-runtime/
 、[ADR 0004](docs/adr/0004-contract-validation.md)
 、[ADR 0005](docs/adr/0005-cancellation-foundation.md)
 、[ADR 0006](docs/adr/0006-lease-heartbeats.md)
-和 [ADR 0007](docs/adr/0007-execution-deadlines.md)。
+、[ADR 0007](docs/adr/0007-execution-deadlines.md)
+和 [ADR 0008](docs/adr/0008-pause-and-resume.md)。

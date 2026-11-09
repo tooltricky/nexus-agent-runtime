@@ -56,6 +56,15 @@ public class LeaseHeartbeatService {
         active.keySet().removeIf(key -> key.taskId().equals(taskId) && key.attempt() <= attempt);
     }
 
+    public void stopThroughFence(String taskId, int attempt, long version) {
+        active.forEach((key, registration) -> {
+            if (key.taskId().equals(taskId) && (key.attempt() < attempt
+                    || (key.attempt() == attempt && registration.task().version() <= version))) {
+                active.remove(key, registration);
+            }
+        });
+    }
+
     @PreDestroy
     public synchronized void close() {
         closed = true;
