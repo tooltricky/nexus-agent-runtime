@@ -35,16 +35,16 @@ public class RuntimeStore {
         this.objectMapper = objectMapper;
     }
 
-    public SessionRecord insertSession(String id) {
+    public SessionRecord insertSession(String id, String tenantId, String projectId) {
         return jdbc.queryForObject(
-                "INSERT INTO sessions (id) VALUES (?) RETURNING id, created_at",
+                "INSERT INTO sessions (id, tenant_id, project_id) VALUES (?, ?, ?) RETURNING *",
                 this::mapSession,
-                id
+                id, tenantId, projectId
         );
     }
 
-    public boolean sessionExists(String id) {
-        Boolean exists = jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?)", Boolean.class, id);
+    public boolean sessionExists(String id, String tenantId, String projectId) {
+        Boolean exists = jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ? AND tenant_id = ? AND project_id = ?)", Boolean.class, id, tenantId, projectId);
         return Boolean.TRUE.equals(exists);
     }
 
@@ -55,10 +55,10 @@ public class RuntimeStore {
     public boolean tryInsertRun(String id, String sessionId, String idempotencyKey, String requestHash, String input,
                                 Instant deadlineAt) {
         return jdbc.update("""
-                INSERT INTO runs (id, session_id, idempotency_key, request_hash, input, status, deadline_at)
-                VALUES (?, ?, ?, ?, ?, 'CREATED', ?)
-                ON CONFLICT (idempotency_key) DO NOTHING
-                """, id, sessionId, idempotencyKey, requestHash, input, timestamp(deadlineAt)) == 1;
+                INSERT INTO runs (id, session_id, idempotency_key, request_hash, input, status, deadline_at, tenant_id, project_id)
+                SELECT ?, id, ?, ?, ?, 'CREATED', ?, tenant_id, project_id FROM sessions WHERE id = ?
+                ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+                """, id, idempotencyKey, requestHash, input, timestamp(deadlineAt), sessionId) == 1;
     }
 
     public Optional<RunRecord> findRun(String id) {
@@ -70,8 +70,8 @@ public class RuntimeStore {
         return queryOne("SELECT * FROM runs WHERE id = ? FOR UPDATE", this::mapRun, id);
     }
 
-    public Optional<RunRecord> findRunByIdempotencyKey(String idempotencyKey) {
-        return queryOne("SELECT * FROM runs WHERE idempotency_key = ?", this::mapRun, idempotencyKey);
+    public Optional<RunRecord> findRunByIdempotencyKey(String tenantId, String idempotencyKey) {
+        return queryOne("SELECT * FROM runs WHERE tenant_id = ? AND idempotency_key = ?", this::mapRun, tenantId, idempotencyKey);
     }
 
     public void insertTask(String id, String runId, String name, JsonNode input) {
@@ -80,9 +80,9 @@ public class RuntimeStore {
 
     public void insertTask(String id, String runId, String name, JsonNode input, Instant deadlineAt) {
         jdbc.update("""
-                INSERT INTO tasks (id, run_id, name, status, input, deadline_at)
-                VALUES (?, ?, ?, 'PENDING', CAST(? AS jsonb), ?)
-                """, id, runId, name, json(input), timestamp(deadlineAt));
+                INSERT INTO tasks (id, run_id, name, status, input, deadline_at, tenant_id, project_id)
+                SELECT ?, id, ?, 'PENDING', CAST(? AS jsonb), ?, tenant_id, project_id FROM runs WHERE id = ?
+                """, id, name, json(input), timestamp(deadlineAt), runId);
     }
 
     public List<TaskRecord> findTasks(String runId) {
@@ -428,14 +428,18 @@ public class RuntimeStore {
 
     public List<EventRecord> findTimeline(String runId) {
         return jdbc.query(
-                "SELECT * FROM domain_events WHERE run_id = ? ORDER BY sequence",
+                """
+                SELECT e.*, o.tenant_id, o.project_id FROM domain_events e
+                LEFT JOIN event_ownership o ON o.event_id = e.event_id
+                WHERE e.run_id = ? ORDER BY e.sequence
+                """,
                 this::mapEvent,
                 runId
         );
     }
 
     private SessionRecord mapSession(ResultSet rs, int rowNum) throws SQLException {
-        return new SessionRecord(rs.getString("id"), instant(rs, "created_at"));
+        return new SessionRecord(rs.getString("id"), instant(rs, "created_at"), rs.getString("tenant_id"), rs.getString("project_id"));
     }
 
     private RunRecord mapRun(ResultSet rs, int rowNum) throws SQLException {
@@ -450,7 +454,7 @@ public class RuntimeStore {
                 jsonNode(rs.getString("output")),
                 rs.getLong("version"),
                 instant(rs, "created_at"),
-                instant(rs, "updated_at")
+                instant(rs, "updated_at"), rs.getString("tenant_id"), rs.getString("project_id")
         );
     }
 
@@ -470,7 +474,7 @@ public class RuntimeStore {
                 instant(rs, "next_attempt_at"),
                 rs.getLong("version"),
                 instant(rs, "created_at"),
-                instant(rs, "updated_at")
+                instant(rs, "updated_at"), rs.getString("tenant_id"), rs.getString("project_id")
         );
     }
 
@@ -483,6 +487,9 @@ public class RuntimeStore {
     }
 
     private EventRecord mapEvent(ResultSet rs, int rowNum) throws SQLException {
+        if (rs.getString("tenant_id") == null || rs.getString("project_id") == null) {
+            throw new SQLException("Event ownership missing");
+        }
         return new EventRecord(
                 rs.getLong("sequence"),
                 rs.getString("event_id"),
@@ -493,7 +500,7 @@ public class RuntimeStore {
                 rs.getString("event_type"),
                 jsonNode(rs.getString("payload")),
                 instant(rs, "occurred_at"),
-                rs.getString("schema_version")
+                rs.getString("schema_version"), rs.getString("tenant_id"), rs.getString("project_id")
         );
     }
 

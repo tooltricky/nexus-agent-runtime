@@ -20,7 +20,7 @@ public final class ApiModels {
         public CreateRunRequest(String sessionId, String input) { this(sessionId, input, null); }
     }
 
-    public record SessionResponse(String sessionId, Instant createdAt) {
+    public record SessionResponse(String sessionId, Instant createdAt, String tenantId, String projectId) {
     }
 
     public record AcceptedRunResponse(String runId) {
@@ -40,7 +40,8 @@ public final class ApiModels {
             Instant nextAttemptAt,
             PauseCheckpointRecord checkpoint,
             Instant createdAt,
-            Instant updatedAt
+            Instant updatedAt,
+            String tenantId, String projectId
     ) {
     }
 
@@ -53,7 +54,8 @@ public final class ApiModels {
             JsonNode output,
             List<TaskResponse> tasks,
             Instant createdAt,
-            Instant updatedAt
+            Instant updatedAt,
+            String tenantId, String projectId
     ) {
     }
 
@@ -67,7 +69,8 @@ public final class ApiModels {
             String eventType,
             JsonNode payload,
             Instant occurredAt,
-            @JsonInclude(JsonInclude.Include.NON_NULL) String schemaVersion
+            @JsonInclude(JsonInclude.Include.NON_NULL) String schemaVersion,
+            String tenantId, String projectId
     ) {
     }
 

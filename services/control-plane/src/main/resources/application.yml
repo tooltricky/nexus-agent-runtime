@@ -25,6 +25,10 @@ management:
         enabled: true
 
 nexus:
+  identity:
+    development-enabled: ${DEVELOPMENT_IDENTITY_ENABLED:false}
+    tenant-id: ${DEVELOPMENT_TENANT_ID:}
+    project-id: ${DEVELOPMENT_PROJECT_ID:}
   timeout:
     enabled: ${DEADLINE_WATCHDOG_ENABLED:true}
     poll-delay-ms: ${DEADLINE_WATCHDOG_POLL_DELAY_MS:1000}

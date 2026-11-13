@@ -34,7 +34,7 @@ class ContractValidationTest {
 
     @Test
     void responseSchemasRejectMissingFieldsWrongTypesAndInvalidDateTime() throws Exception {
-        JsonNode session = mapper.readTree("{\"session_id\":\"ses_test\",\"created_at\":\"2026-10-23T08:00:00Z\"}");
+        JsonNode session = ContractAssertions.withOwnership(mapper.readTree("{\"session_id\":\"ses_test\",\"created_at\":\"2026-10-23T08:00:00Z\"}"));
         assertThat(ContractAssertions.responseErrors("/v1/sessions", "post", 201, session)).isEmpty();
         for (String field : List.of("session_id", "created_at")) {
             ObjectNode missing = session.deepCopy();
@@ -67,6 +67,7 @@ class ContractValidationTest {
                   "updated_at": "2026-10-23T08:00:00Z"
                 }
                 """);
+        run = ContractAssertions.withOwnership(run);
         run.put("future_optional_field", "compatible");
         assertThat(ContractAssertions.responseErrors("/v1/runs/{run_id}", "get", 200, run)).isEmpty();
         run.remove("future_optional_field");

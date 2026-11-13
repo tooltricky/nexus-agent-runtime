@@ -16,6 +16,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
+    @ExceptionHandler(io.nexus.controlplane.identity.IdentityUnavailableException.class)
+    public ResponseEntity<ErrorResponse> identityUnavailable() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(new ErrorResponse("identity_unavailable", "Trusted tenant and project context is unavailable"));
+    }
+
     @ExceptionHandler(PauseConflictException.class)
     public ResponseEntity<ErrorResponse> pauseConflict(PauseConflictException exception) {
         return ResponseEntity.status(HttpStatus.CONFLICT)

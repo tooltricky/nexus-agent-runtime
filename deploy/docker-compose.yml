@@ -20,6 +20,9 @@ services:
       context: ..
       dockerfile: services/control-plane/Dockerfile
     environment:
+      DEVELOPMENT_IDENTITY_ENABLED: "true"
+      DEVELOPMENT_TENANT_ID: legacy
+      DEVELOPMENT_PROJECT_ID: legacy
       DB_URL: jdbc:postgresql://postgres:5432/nexus
       DB_USERNAME: nexus
       DB_PASSWORD: nexus

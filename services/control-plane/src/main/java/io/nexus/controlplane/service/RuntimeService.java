@@ -15,6 +15,7 @@ import io.nexus.controlplane.domain.Records.SessionRecord;
 import io.nexus.controlplane.domain.Records.TaskRecord;
 import io.nexus.controlplane.domain.RunStatus;
 import io.nexus.controlplane.persistence.RuntimeStore;
+import io.nexus.controlplane.identity.TenantContextSource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,21 +31,25 @@ public class RuntimeService {
 
     private final RuntimeStore store;
     private final ObjectMapper objectMapper;
+    private final TenantContextSource identities;
 
-    public RuntimeService(RuntimeStore store, ObjectMapper objectMapper) {
+    public RuntimeService(RuntimeStore store, ObjectMapper objectMapper, TenantContextSource identities) {
         this.store = store;
         this.objectMapper = objectMapper;
+        this.identities = identities;
     }
 
     @Transactional
     public SessionResponse createSession() {
-        SessionRecord session = store.insertSession(Ids.sessionId());
-        return new SessionResponse(session.id(), session.createdAt());
+        var scope = identities.requireContext();
+        SessionRecord session = store.insertSession(Ids.sessionId(), scope.tenantId(), scope.projectId());
+        return new SessionResponse(session.id(), session.createdAt(), session.tenantId(), session.projectId());
     }
 
     @Transactional
     public AcceptedRunResponse createRun(String idempotencyKey, CreateRunRequest request) {
-        if (!store.sessionExists(request.sessionId())) {
+        var scope = identities.requireContext();
+        if (!store.sessionExists(request.sessionId(), scope.tenantId(), scope.projectId())) {
             throw new NotFoundException("Session not found: " + request.sessionId());
         }
 
@@ -64,9 +69,9 @@ public class RuntimeService {
         );
 
         if (!created) {
-            RunRecord existing = store.findRunByIdempotencyKey(idempotencyKey)
+            RunRecord existing = store.findRunByIdempotencyKey(scope.tenantId(), idempotencyKey)
                     .orElseThrow(() -> new IllegalStateException("Idempotent Run disappeared"));
-            if (!MessageDigest.isEqual(
+            if (!existing.projectId().equals(scope.projectId()) || !MessageDigest.isEqual(
                     requestHash.getBytes(StandardCharsets.UTF_8),
                     existing.requestHash().getBytes(StandardCharsets.UTF_8))) {
                 throw new ConflictException("Idempotency-Key was already used with a different request");
@@ -120,7 +125,7 @@ public class RuntimeService {
                 run.output(),
                 tasks,
                 run.createdAt(),
-                run.updatedAt()
+                run.updatedAt(), run.tenantId(), run.projectId()
         );
     }
 
@@ -133,9 +138,14 @@ public class RuntimeService {
         return new TimelineResponse(runId, events);
     }
 
-    private RunRecord findRun(String runId) {
-        return store.findRun(runId).orElseThrow(() -> new NotFoundException("Run not found: " + runId));
+    public RunRecord requireRunScope(String runId) {
+        var scope = identities.requireContext();
+        return store.findRun(runId)
+                .filter(run -> run.tenantId().equals(scope.tenantId()) && run.projectId().equals(scope.projectId()))
+                .orElseThrow(() -> new NotFoundException("Run not found: " + runId));
     }
+
+    private RunRecord findRun(String runId) { return requireRunScope(runId); }
 
     private TaskResponse toTaskResponse(TaskRecord task) {
         return new TaskResponse(
@@ -152,7 +162,7 @@ public class RuntimeService {
                 task.nextAttemptAt(),
                 store.findPauseCheckpoint(task.id()).orElse(null),
                 task.createdAt(),
-                task.updatedAt()
+                task.updatedAt(), task.tenantId(), task.projectId()
         );
     }
 
@@ -167,7 +177,7 @@ public class RuntimeService {
                 event.eventType(),
                 event.payload(),
                 event.occurredAt(),
-                event.schemaVersion()
+                event.schemaVersion(), event.tenantId(), event.projectId()
         );
     }
 

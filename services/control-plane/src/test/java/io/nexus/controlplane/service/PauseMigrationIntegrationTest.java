@@ -42,7 +42,7 @@ class PauseMigrationIntegrationTest {
                 var runs = jdbc.queryForList("SELECT to_jsonb(r)::text AS row FROM runs r ORDER BY id");
                 var tasks = jdbc.queryForList("SELECT to_jsonb(t)::text AS row FROM tasks t ORDER BY id");
                 var events = jdbc.queryForList("SELECT to_jsonb(e)::text AS row FROM domain_events e ORDER BY sequence");
-                var flyway = Flyway.configure().dataSource(source).schemas(schema).defaultSchema(schema).load();
+                var flyway = Flyway.configure().dataSource(source).schemas(schema).defaultSchema(schema).target("6").load();
                 assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1); flyway.validate();
                 assertThat(jdbc.queryForList("SELECT to_jsonb(r)::text AS row FROM runs r ORDER BY id")).isEqualTo(runs);
                 assertThat(jdbc.queryForList("SELECT to_jsonb(t)::text AS row FROM tasks t ORDER BY id")).isEqualTo(tasks);
@@ -51,6 +51,7 @@ class PauseMigrationIntegrationTest {
                 for (String sql : List.of("UPDATE runs SET status='PAUSED' WHERE id='run_0'", "UPDATE tasks SET status='PAUSED' WHERE id='tsk_0'")) {
                     assertThrows(DataAccessException.class, () -> jdbc.update(sql));
                 }
+                Flyway.configure().dataSource(source).schemas(schema).defaultSchema(schema).load().migrate();
                 var store = new RuntimeStore(jdbc, new ObjectMapper());
                 c.setAutoCommit(false);
                 var task = store.findTasks("run_0").getFirst(); var run = store.findRun("run_0").orElseThrow();

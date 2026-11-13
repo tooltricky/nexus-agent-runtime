@@ -47,27 +47,27 @@ public class RunController {
 
     @GetMapping("/{runId}")
     public ResponseEntity<RunResponse> getRun(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(runtimeService.getRun(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.5").body(runtimeService.getRun(runId));
     }
 
     @PostMapping("/{runId}/cancel")
     public ResponseEntity<RunResponse> cancelRun(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(cancellations.cancel(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.5").body(cancellations.cancel(runId));
     }
 
     @PostMapping("/{runId}/pause")
     public ResponseEntity<RunResponse> pauseRun(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(pauses.pause(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.5").body(pauses.pause(runId));
     }
 
     @PostMapping("/{runId}/resume")
     public ResponseEntity<RunResponse> resumeRun(@PathVariable String runId,
             @RequestHeader(value = "Pause-Checkpoint", required = false) String checkpointId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(pauses.resume(runId, checkpointId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.5").body(pauses.resume(runId, checkpointId));
     }
 
     @GetMapping("/{runId}/timeline")
     public ResponseEntity<TimelineResponse> getTimeline(@PathVariable String runId) {
-        return ResponseEntity.ok().header("Nexus-API-Contract", "0.4").body(runtimeService.getTimeline(runId));
+        return ResponseEntity.ok().header("Nexus-API-Contract", "0.5").body(runtimeService.getTimeline(runId));
     }
 }

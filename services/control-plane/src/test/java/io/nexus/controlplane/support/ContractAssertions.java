@@ -52,7 +52,13 @@ public final class ContractAssertions {
 
     public static void response(String path, String method, ResponseEntity<JsonNode> response) {
         if ((method.equals("get") || path.endsWith("/cancel") || path.endsWith("/pause") || path.endsWith("/resume")) && response.getStatusCode().is2xxSuccessful()) {
-            assertThat(response.getHeaders().getFirst("Nexus-API-Contract")).isEqualTo("0.4");
+            String revision = response.getHeaders().getFirst("Nexus-API-Contract");
+            assertThat(revision).isEqualTo("0.5");
+            JsonNode header = API.path("paths").path(path).path(method).path("responses")
+                    .path(Integer.toString(response.getStatusCode().value())).path("headers")
+                    .path("Nexus-API-Contract").path("schema");
+            assertThat(header.isMissingNode()).isFalse();
+            assertThat(errors(header, JSON.valueToTree(revision))).as("documented representation revision").isEmpty();
         }
         assertThat(response.getHeaders().getContentType()).isNotNull()
                 .satisfies(type -> assertThat(type.isCompatibleWith(MediaType.APPLICATION_JSON)).isTrue());
@@ -87,6 +93,21 @@ public final class ContractAssertions {
 
     public static Set<ValidationMessage> responseErrors(String path, String method, int status, JsonNode body) {
         return errors(responseSchema(path, method, status), body);
+    }
+
+    /** An explicit HTTP ownership overlay for frozen historical response samples. */
+    public static ObjectNode withOwnership(JsonNode sample) {
+        ObjectNode run = sample.deepCopy();
+        run.put("tenant_id", "legacy").put("project_id", "legacy");
+        for (JsonNode task : run.path("tasks")) {
+            ((ObjectNode) task).put("tenant_id", "legacy").put("project_id", "legacy");
+        }
+        return run;
+    }
+
+    public static Set<ValidationMessage> archivedPauseRunErrors(JsonNode run) {
+        var api = readApi("openapi-v0.4.yaml");
+        return errors(api.at("/components/schemas/Run"), run, api);
     }
 
     public static Set<ValidationMessage> requestErrors(JsonNode body) {
@@ -150,6 +171,7 @@ public final class ContractAssertions {
                     ContractAssertions.class.getResourceAsStream("/contracts/" + name));
             assertThat(api.path("openapi").asText()).isEqualTo("3.1.0");
             resolveEventReferences(api.at("/components/schemas/DomainEvent"));
+            resolveEventReferences(api.at("/components/schemas/OwnedDomainEvent"));
             return api;
         } catch (IOException e) {
             throw new IllegalStateException("Cannot load OpenAPI contract", e);
@@ -159,6 +181,7 @@ public final class ContractAssertions {
     private static void resolveEventReferences(JsonNode node) {
         if (node.isObject() && node.has("$ref")) {
             String ref = node.path("$ref").asText();
+            if (ref.startsWith("#/")) return;
             assertThat(ref).startsWith("./events/");
             try {
                 ((ObjectNode) node).put("$ref", ContractAssertions.class

@@ -1,11 +1,14 @@
 openapi: 3.1.0
 info:
   title: Nexus Agent Runtime API
-  version: 0.4.0
+  version: 0.5.0
   description: >-
-    Contract revision 0.4 for the /v1 API. Successful Run/timeline GET and cancel/pause/resume POST
-    responses identify this revision with Nexus-API-Contract: 0.4. Clients must
-    understand PAUSED and mixed 0.1/0.2/0.3/0.4 event versions before pause/resume is enabled.
+    Contract revision 0.5 for the /v1 API. Successful Run/timeline GET and cancel/pause/resume POST
+    responses identify this revision with Nexus-API-Contract: 0.5. Clients must
+    understand server-assigned tenant/project ownership and mixed 0.1/0.2/0.3/0.4 payload versions.
+    Unverified headers or body fields cannot select identity. Missing trusted context returns 403;
+    resources outside the current scope return 404. Idempotency keys are unique within a tenant,
+    including across projects. Development identity must be explicitly enabled; Token authentication is deferred.
 servers:
   - url: http://localhost:8080
 paths:
@@ -14,6 +17,12 @@ paths:
       operationId: createSession
       summary: Create a Session
       responses:
+        "403":
+          description: Trusted tenant and project context is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityUnavailableError"
         "201":
           description: Session created
           content:
@@ -36,6 +45,12 @@ paths:
               session_id: ses_19f9c46d-988c-4692-bbd0-854fb1bf0771
               input: 分析订单服务错误率
       responses:
+        "403":
+          description: Trusted tenant and project context is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityUnavailableError"
         "400":
           $ref: "#/components/responses/BadRequest"
         "202":
@@ -47,7 +62,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The idempotency key was reused for a different request
+          description: The tenant-scoped idempotency key was reused for a different request or project
           content:
             application/json:
               schema:
@@ -59,6 +74,12 @@ paths:
       operationId: getRun
       summary: Get current Run and Task state
       responses:
+        "403":
+          description: Trusted tenant and project context is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityUnavailableError"
         "200":
           description: Current Run state
           headers:
@@ -66,7 +87,7 @@ paths:
               description: Explicit representation revision; no legacy negotiation is supported.
               required: true
               schema:
-                const: "0.4"
+                const: "0.5"
           content:
             application/json:
               schema:
@@ -89,6 +110,12 @@ paths:
         for an executing transaction and does not undo external side effects or
         promise immediate interruption.
       responses:
+        "403":
+          description: Trusted tenant and project context is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityUnavailableError"
         "200":
           description: Cancelled Run, including an already cancelled Run
           headers:
@@ -96,7 +123,7 @@ paths:
               description: Explicit representation revision; no legacy negotiation is supported.
               required: true
               schema:
-                const: "0.4"
+                const: "0.5"
           content:
             application/json:
               schema:
@@ -126,13 +153,19 @@ paths:
       summary: Pause unfinished work with a durable checkpoint
       description: No body or Idempotency-Key required; body is ignored. Pause revokes the current lease and results, then cooperatively stops old executions after commit. Repeated pause while PAUSED is a no-op. A pause arriving after an intervening resume is a new pause request. Deadline continues while paused; discovering expiry commits TIMEOUT before 409. Terminal states reject either operation.
       responses:
+        "403":
+          description: Trusted tenant and project context is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityUnavailableError"
         '200':
           description: Current Run after the operation or an unchanged repeat
           headers:
             Nexus-API-Contract:
               required: true
               schema:
-                const: '0.4'
+                const: '0.5'
           content:
             application/json:
               schema:
@@ -153,13 +186,19 @@ paths:
       summary: Resume only unfinished work from the latest checkpoint
       description: No body or Idempotency-Key required; body is ignored. Optional Pause-Checkpoint binds a retry to that cycle; mismatches conflict. Without it a delayed request may target a later pause. Repeated resume while active is a no-op. Interrupted Task restarts from its beginning on a new attempt; already consumed attempts are not refunded. If exhausted, return 200 FAILED without execution. Deadline continues while paused; discovering expiry commits TIMEOUT before 409. Terminal states reject either operation.
       responses:
+        "403":
+          description: Trusted tenant and project context is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityUnavailableError"
         '200':
           description: Current Run after the operation or an unchanged repeat
           headers:
             Nexus-API-Contract:
               required: true
               schema:
-                const: '0.4'
+                const: '0.5'
           content:
             application/json:
               schema:
@@ -186,6 +225,12 @@ paths:
       operationId: getRunTimeline
       summary: Get the ordered immutable domain-event timeline
       responses:
+        "403":
+          description: Trusted tenant and project context is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentityUnavailableError"
         "200":
           description: Events ordered by their database sequence
           headers:
@@ -193,7 +238,7 @@ paths:
               description: Explicit representation revision; no legacy negotiation is supported.
               required: true
               schema:
-                const: "0.4"
+                const: "0.5"
           content:
             application/json:
               schema:
@@ -233,8 +278,18 @@ components:
   schemas:
     Session:
       type: object
-      required: [session_id, created_at]
+      required: [tenant_id, project_id, session_id, created_at]
       properties:
+        tenant_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
+        project_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
         session_id:
           type: string
         created_at:
@@ -273,7 +328,7 @@ components:
       enum: [PENDING, LEASED, EXECUTING, RETRYING, PAUSED, SUCCEEDED, FAILED, CANCELLED, TIMEOUT]
     Task:
       type: object
-      required: [task_id, name, status, input, attempt, max_attempts, next_attempt_at, created_at, updated_at]
+      required: [tenant_id, project_id, task_id, name, status, input, attempt, max_attempts, next_attempt_at, created_at, updated_at]
       allOf:
         - if:
             properties:
@@ -325,6 +380,16 @@ components:
                 - required: [lease_owner]
                 - required: [lease_expires_at]
       properties:
+        tenant_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
+        project_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
         checkpoint:
           $ref: "#/components/schemas/PauseCheckpoint"
         task_id:
@@ -372,7 +437,7 @@ components:
           format: date-time
     Run:
       type: object
-      required: [run_id, session_id, input, status, tasks, created_at, updated_at]
+      required: [tenant_id, project_id, run_id, session_id, input, status, tasks, created_at, updated_at]
       allOf:
         - if:
             properties:
@@ -406,6 +471,16 @@ components:
             not:
               required: [output]
       properties:
+        tenant_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
+        project_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: '\S'
         run_id:
           type: string
         session_id:
@@ -513,6 +588,11 @@ components:
           - $ref: "./events/domain-event-v0.4.schema.json"
       else:
         $ref: "./events/domain-event.schema.json"
+    OwnedDomainEvent:
+      description: HTTP 0.5 ownership overlay; the original payload schema_version remains unchanged.
+      allOf:
+        - $ref: "#/components/schemas/DomainEvent"
+        - $ref: "./events/owned-domain-event-v0.5.schema.json"
     Timeline:
       type: object
       required: [run_id, events]
@@ -522,16 +602,22 @@ components:
         events:
           type: array
           items:
-            $ref: "#/components/schemas/DomainEvent"
+            $ref: "#/components/schemas/OwnedDomainEvent"
     Error:
       type: object
       required: [code, message]
       properties:
         code:
           type: string
-          enum: [invalid_request, not_found, idempotency_conflict, cancellation_conflict, pause_conflict]
+          enum: [invalid_request, not_found, idempotency_conflict, cancellation_conflict, pause_conflict, identity_unavailable]
         message:
           type: string
+    IdentityUnavailableError:
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - properties:
+            code:
+              const: identity_unavailable
     InvalidRequestError:
       allOf:
         - $ref: "#/components/schemas/Error"

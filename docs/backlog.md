@@ -2,13 +2,13 @@
 
 ## 当前状态
 
-截至 2026-11-07，项目是带租约、有限重试、原子取消、截止时间、暂停 / 恢复和短事务执行的单任务 Runtime 骨架，B01–B09 已完成；当前保留 B09“暂停 / 恢复与最小 checkpoint”的方案、审查基线和本地验收结果，尚未提交本次改动，未开始 B10。B03 的 CI 工作流、报告检查器、JAR 打包和 GitHub Actions 实跑均已验证；B05–B09 已通过本地独立 PostgreSQL 验收。详细背景见 [README](../README.md)、[项目设计](project-design.md) 和 [ADR](adr/)。本文件只保留当前任务、未完成路线和精简完成记录；具体实现细节以代码和 Git 提交为准。
+截至 2026-11-12，项目是带租约、有限重试、原子取消、截止时间、暂停 / 恢复和短事务执行的单任务 Runtime 骨架，B01–B10 已完成，B09 已提交为 `0106823`；当前保留 B10“租户 / 项目归属与租户范围幂等”的方案、审查基线及本地验收结果，B10 改动尚未提交，未开始 B11。B03 的 CI 工作流、报告检查器、JAR 打包和 GitHub Actions 实跑均已验证；B05–B09 已通过本地独立 PostgreSQL 验收。详细背景见 [README](../README.md)、[项目设计](project-design.md) 和 [ADR](adr/)。本文件只保留当前任务、未完成路线和精简完成记录；具体实现细节以代码和 Git 提交为准。
 
 设计说明书是目标蓝图，ADR 是当前已接受的落地决策。继续优先采用 Spring Boot 模块化单体和 PostgreSQL；不把引入全部语言、中间件或拆分服务作为下一步的前置条件。改变既有语义或引入部署边界时补充 ADR。特别是 ADR 0003 已取代 ADR 0002 中“租约过期立即回到 PENDING”的行为。
 
 ## 任务执行规则
 
-- B01–B09 已完成，B10 及后续任务仍为“待办”；编号给出推荐开发顺序，“依赖”列列出主要直接依赖。一次只选一个任务，完成后再选下一项。
+- B01–B10 已完成，B11 及后续任务仍为“待办”；编号给出推荐开发顺序，“依赖”列列出主要直接依赖。一次只选一个任务，完成后再选下一项。
 - 每项都要形成独立、可审查的交付。表中“做什么”是范围，“怎样检查完成”是必须满足的验收条件；不是看到类名、接口或配置文件就算完成。
 - 当前任务保留完整方案、验收条件和审查基线；任务完成并切换到下一项时，将其压缩为完成日期、提交编号、关键验证结果及未解决 / 未验证事项，不累计完整方案或逐项测试日志。长期设计和操作说明分别维护在 ADR 与 README，历史实现按需查 Git；确需单独留存的验收材料只在此提供链接。
 - 功能有数据库、状态、HTTP 或事件变化时，同步更新迁移、OpenAPI / JSON Schema、必要测试和 README；不回改已经应用的 V1–V3 迁移。新增状态不能只改 Java 枚举。
@@ -128,33 +128,35 @@
 
 ## 当前任务
 
-**B09：暂停 / 恢复与最小 checkpoint（已完成）**。依赖 B08；2026-11-07 按登记方案完成实现并通过本地独立 PostgreSQL 全量验收。以下保留原方案、验收条件和修改前基线供审查，最终规则见 [ADR 0008](adr/0008-pause-and-resume.md)。本次改动尚未提交，未开始 B10。
+**B10：租户 / 项目归属与租户范围幂等（已完成）**。依赖 B09；2026-11-12 按登记方案实现并通过本地独立 PostgreSQL 全量验收，最终规则见 [ADR 0009](adr/0009-tenant-project-ownership.md)。
 
-通俗地说，Run 是整件工作，Task 是具体工单。暂停像把未完成工单放回文件夹，并夹上一张重启后仍在的“进度纸”（checkpoint）；恢复时按纸上的记录继续安排未完成工作，已完成的工单不重做。当前执行器不能从某一行代码继续，执行中被暂停的 Task 恢复后须从该 Task 开头重新执行；暂停期间最晚结束时间仍照常计时。
+通俗地说，租户是一家公司，项目是公司里的工作文件夹；Session 是会话，Run 是整件工作，Task 是具体工单，Event 是操作记录。这个任务要给它们贴上正确的归属标签，防止把甲项目的工单放进乙项目。“幂等键”像提交回执编号：同一家公司重复提交相同内容，只返回原工单；不同公司可以使用相同编号，互不影响。归属标签由服务端可信来源决定，不能由请求者随意填写。
 
 | 字段 | 内容 |
 | --- | --- |
-| 任务编号 / 名称 | B09：增加 PAUSED、暂停 / 恢复接口和最小 checkpoint；定义进行中 attempt 的处置，恢复时只调度未完成工作 |
-| 状态 | 2026-11-07 已完成；独立 PostgreSQL 全量验收 24 个测试类、248 项通过，其中数据库集成 14 类、198 项实际执行，失败 / 错误 / 跳过均为 0。报告检查、JAR 打包及 Python 检查器回归 12 项通过；测试容器和网络已清理。未提交改动，未开始下一任务。 |
-| 目标与范围 | 支持排队、已领取、执行中和等待重试的 Run / Task 暂停与恢复；暂停状态和恢复所需进度持久化，重启不丢失。暂停后不再领取、启动执行或续租，旧执行者不能写回成功 / 失败。重复操作不产生额外执行或重复事件；已成功 Task 的结果保留且不重跑。继续使用当前单 Run 单 Task、短事务、owner / attempt / version 校验和数据库时间，不提前实现 DAG、多 Agent、通用步骤级快照或远程 Worker。 |
-| 暂停与恢复规则（拟定） | Run / Task 增加非终态 PAUSED。PENDING、LEASED、EXECUTING、RETRYING 均可暂停；暂停事务保存暂停前状态及进度，清除租约并增加状态版本，使旧执行资格立即失效。状态提交成功后才发送协作式停止信号、清理旧心跳；不响应中断的执行器可能继续占用线程，但迟到结果必须被拒绝。恢复 PENDING 时重新排队；恢复 RETRYING 时保留原 next_attempt_at，到点才可领取，不重算退避；恢复 LEASED / EXECUTING 时丢弃该次未完成输出，重新排队并在下次领取时开启新 attempt。已消耗 attempt 不退还，暂停 / 恢复本身不增加 attempt；若被中断的 attempt 已耗尽次数，恢复时按明确的失败规则原子转为 FAILED，不能再启动一次执行。Run 恢复到暂停前对应的 QUEUED / RUNNING，已启动 Run 不重复记录 RunStarted。 |
-| 接口与优先级（拟定） | 新增 POST /v1/runs/{run_id}/pause 和 /resume，成功返回 200 与当前 Run；已暂停时再次暂停、活动状态下再次恢复均为不改状态、不追加事件的 200，保证同一暂停周期内的重复恢复只调度一次；不存在返回 404，终态操作返回 409 并保留原结果。重复恢复的保证针对同一暂停周期，跨新一轮暂停的迟到请求及其去重边界须在 ADR 和接口合约中明确。暂停期间允许取消，截止时间继续流逝；暂停与恢复均按 Task → Run 顺序锁定后重查数据库时间，到期的未完成工作优先原子转为 TIMEOUT，提交后返回冲突，不因抛出异常撤回超时。截止前与成功、最终失败、取消的竞争沿用 ADR 0007 的锁后有效判定点；已有终态不可逆，回滚事务不算获胜。 |
-| 最小 checkpoint（拟定） | 用 V6 新增持久化字段或专用记录，保存 schema 版本、暂停周期标识、Run / Task 暂停前状态、Task 标识、attempt、状态版本、next_attempt_at 和暂停时间；沿用已有 Task 输入及成功输出，不序列化线程、调用栈或未完成的临时结果。checkpoint 与 PAUSED 状态、租约撤销及暂停事件在同一事务保存；恢复时校验并原子消费 / 标记该周期，重复恢复不得再次派发。恢复后的状态版本保持单调增加，不能把 checkpoint 内的旧 version 写回；旧进度、旧 owner、旧 attempt 或旧停止通知不得影响恢复后的执行。保留当前单 Task 约束，多节点 checkpoint 留待 B23–B25。 |
-| 实现方案①：规则、状态与数据库 | 在 docs/adr/ 新增暂停 / 恢复 ADR，明确上述规则、次数耗尽、重复请求边界、事件顺序、恢复目标状态和事务判定点；先补领域与场景测试。Java 路径相对于 services/control-plane/src/main/java/io/nexus/controlplane/：调整 domain/RunStatus.java、TaskStatus.java、Records.java，增加 PAUSED 及 checkpoint 数据；在 src/main/resources/db/migration/ 新增 V6，扩展状态、暂停字段 / checkpoint 约束和必要索引。暂停任务必须无租约，PAUSED 仍可取消或超时；不回改 V1–V5，不改写历史事件。 |
-| 实现方案②：原子接口与事件 | 在 service/ 新增暂停 / 恢复事务服务，在 api/RunController.java 增加两个接口，配合 ApiModels.java、ApiExceptionHandler.java 和 RuntimeService.java 输出状态及必要的进度摘要。在 persistence/RuntimeStore.java 增加锁定、保存 / 消费 checkpoint、暂停 / 恢复更新；沿用 Task → Run 锁顺序，锁后复核状态、版本和期限。按 TaskPaused → RunPaused、TaskResumed → RunResumed 的顺序写入新版本事件；次数耗尽恢复转失败的事件顺序在 ADR 中明确。Run / Task、checkpoint、租约、版本和全部事件同事务提交，任何写入失败全部回滚。 |
-| 实现方案③：调度、旧结果与停止通知 | 调整 RuntimeStore.java、service/WorkerTransactionService.java，确保暂停后的领取、已有任务选择、进入执行、执行前检查、续租及结果提交全部拒绝旧执行资格。调整 FakeWorkerService.java、ExecutionControlRegistry.java、LeaseHeartbeatService.java，并扩展或抽取 ExecutionTimeoutMonitor.java 的本机核对能力：只对已提交的暂停周期发出停止，按旧 attempt / version 限定范围；快速暂停后立即恢复、另一实例提交暂停、心跳注册已移除及通知延迟时，仍能发现旧执行资格失效，且不能误停新执行。执行调用继续在行锁事务之外；停止异常不能当作普通执行失败重试，执行器真正退出后才释放执行名额。 |
-| 实现方案④：取消、超时与兼容 | 调整 RunCancellationService.java、TaskTimeoutService.java、DeadlineWatchdogService.java、TaskFailureService.java、LeaseWatchdogService.java 及相关 SQL / 索引，将 PAUSED 纳入取消和截止时间处理，租约 watchdog 不接管暂停任务；恢复后保留原绝对截止时间、已耗 attempt 和原重试等待。packages/contracts/ 发布包含 PAUSED、接口、checkpoint 摘要及新事件的新版定义和正反例，冻结现行 0.3 HTTP 合约并保留旧事件版本可读；检查旧取消 / 超时事件 Schema 对 from=PAUSED 的兼容性，需要扩展时使用新版本，不能悄悄改写旧版规则。更新 README、合约说明和本待办；新增 / 重命名测试类时同步 scripts/check-test-reports.py 的必需清单。 |
-| 验收条件①：暂停与恢复 | PENDING（Run 为 QUEUED）、LEASED、EXECUTING、RETRYING 均能暂停，Run / Task 和 checkpoint 一致、租约清空；暂停后不能新领取、进入执行、续租、被租约 watchdog 重试或接受迟到结果。恢复只安排未完成工作，重试保留原 next_attempt_at，已耗尝试次数不退还、次数耗尽不再执行；已成功 Task 不重跑。重复暂停 / 恢复及并发恢复不增加事件、版本、attempt 或额外派发（首次有效恢复除外），无重复 RunStarted。HTTP 验证 200 / 404 / 409、查询进度和新状态。 |
-| 验收条件②：停止、重启与跨实例 | 使用可控阻塞执行器，验证暂停提交后响应中断的执行器退出并释放名额，其他 Run、心跳、watchdog 继续推进；忽略中断的旧执行器稍后提交成功 / 失败均无效。覆盖快速暂停 / 恢复、新 attempt 已启动后旧停止通知到达、两个实例共享 PostgreSQL、心跳已移除以及停止核对暂时读库失败；只停止旧执行，不误停新 attempt。关闭并重建整个 Spring 应用上下文及连接池，确认 PAUSED 不被自动执行，checkpoint、期限和退避保留，恢复只启动一次；未提交或回滚的暂停不能发出停止。 |
-| 验收条件③：竞争与原子性 | 用独立事务验证暂停 / 恢复与领取、进入执行、续租、成功、最终失败、重试、取消、超时及 watchdog 两种先后顺序，包含等待行锁时跨过截止时间。暂停期间到期转 TIMEOUT，恢复或取消发现到期也不能复活任务；截止前已有有效终态决定不被暂停覆盖。注入 checkpoint 保存及第一 / 第二条暂停或恢复事件写入失败，验证状态、checkpoint、租约、版本和事件全部回滚；数据库故障不计为执行器失败。 |
-| 验收条件④：升级、合约与回归 | 新库及 V5 → V6 升级通过，旧 Run、成功结果和历史事件保留；数据库拒绝非法 PAUSED / 租约 / checkpoint 组合。新旧 HTTP 合约与混合版本事件均按各自版本校验，覆盖从 PAUSED 取消 / 超时，缺字段、错误类型、未知版本及非法状态样本必须失败。现有状态机、创建幂等、领取、重试、取消、续租、超时、重启和迁移回归通过；新增测试进入报告必需清单，独立 PostgreSQL 测试实际执行，失败 / 错误 / 跳过均为 0，报告检查及 JAR 打包通过。 |
-| 实施分支 | `main`（2026-11-07 登记本方案前读取；工作区无未提交改动） |
-| 开始修改前的提交编号 | `1d3f4ae34277d799732844be9ae10216f31500aa`（2026-11-07 修改本待办文档前的 HEAD，已包含 B08；后续审查以此为基线，检查其后的提交、未提交修改及新建文件。本次文档登记也属于基线之后的改动。） |
-| 验证方式 | 功能实施后先运行场景定向测试，再清理 services/control-plane/target/surefire-reports/ 中的旧报告并保留 target/ 下 Maven 缓存。执行 `docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests`（容器内 mvn verify），再运行 `python3 scripts/check-test-reports.py`，检查 XML 中实际执行、失败、错误和跳过数量及 JAR 打包结果；无论成功或失败，最后用同一 Compose 文件 `down` 清理。新增测试类须纳入报告必需清单；若修改报告检查器，另运行 `python3 -B -m unittest discover -s scripts -p 'test_*.py' -v`。只使用独立测试库，不连接演示或业务数据库。 |
-| 实际实现 | 新增 ADR 0008、V6、RunPauseService 和暂停 / 恢复 HTTP 入口；PAUSED、checkpoint、租约撤销、版本与有序事件在同一短事务保存。checkpoint 采用每 Task 一条最新周期记录，恢复 / 取消 / 超时原子消费；已消费记录仍作为旧 attempt / version 的持久化停止围栏。恢复保留绝对期限、退避和已耗次数；中断次数耗尽直接 TaskFailed → RunFailed。新增 ExecutionPauseMonitor，沿用既有停止注册与执行前资格校验，覆盖另一实例快速暂停 / 恢复、无心跳和延迟通知，不误停新执行。原 worker、失败处理和租约 watchdog 的状态 / owner / attempt / version 检查已能拒绝 PAUSED 及旧资格，无需改动这些服务。可选 Pause-Checkpoint 请求头隔离不同暂停周期的恢复重试；不带该头的迟到请求针对当前周期。HTTP / 新事件升级 0.4，冻结 openapi-v0.3.yaml，旧迁移与旧事件 Schema 不变；从 PAUSED 取消 / 超时使用 0.4。README、合约说明、正反例、领域测试和报告必需清单同步更新。 |
-| 实际验证 | 定向测试后清理旧 Surefire 报告，再用独立 Compose 测试库执行全量 mvn verify；24 类 248 项全部通过，其中数据库集成 14 类 198 项。覆盖四阶段暂停 / 恢复、并发重复、暂停周期匹配、尝试耗尽、退避保留、成功不重跑、取消 / 超时、每个状态写入者的两种竞争顺序、行锁等待跨期限、checkpoint 与第一 / 第二条事件故障回滚；完整应用 / 连接池重启、双实例、响应 / 忽略中断、旧通知及迟到结果；停止核对读库失败用可控桩验证下轮重查。V5 → V6 升级保留旧结果和事件，数据库拒绝非法暂停组合；新旧合约正反例及历史回归通过。python3 scripts/check-test-reports.py、Python 检查器 12 项回归与 JAR 打包通过，git diff --check 通过；最终全量日志 /tmp/b09-final-tests.log，测试容器及网络已 down 清理。 |
-| 未完成 / 边界 | B09 范围已完成；checkpoint 只支持 Task 边界恢复，不能续接执行器内部调用。协作式停止不能强制终止忽略中断的执行器、立即停止外部请求或撤销既有副作用，也不保证外部副作用“恰好一次”；执行器退出前继续占用名额，迟到结果仍被拒绝。未做真实模型 / 下游联调、实际断库 / 网络故障演练或新的 GitHub Actions 平台验收；本地读库失败验证使用可控桩。不带 Pause-Checkpoint 的恢复请求不提供跨暂停周期去重。 |
-| 下一步 | 停止在 B09，保留方案、审查基线与验收结果，不自动开始 B10。 |
+| 任务编号 / 名称 | B10：扩展 Session / Run / Task / Event 的租户和项目归属，建立幂等键的租户作用域，明确旧数据迁移和可信身份来源 |
+| 状态 | 2026-11-12 已完成；独立 PostgreSQL 全量验收 29 类 263 项通过，其中数据库集成 17 类 208 项实际执行，失败 / 错误 / 跳过均为 0。报告检查、JAR 打包及 Python 检查器回归 12 项通过；测试容器和网络已清理。改动尚未提交；以下保留登记方案与审查基线。 |
+| 目标与范围 | 为 Session、Run、Task 和 Event 持久化可校验的租户 / 项目归属；创建、查询、状态操作及后台事件写入传递正确上下文。用数据库约束阻止跨租户 / 跨项目关联，将 Run 幂等键唯一范围从全系统改为单租户；旧 Run、成功结果、checkpoint 和事件历史升级后保留可读。沿用单 Run 单 Task、短事务和已有执行资格校验。真实 OAuth2 / OIDC Token 校验及正式身份接入留待 B11，RBAC / ABAC 留待 B12；B10 不宣称已完成生产多租户认证。 |
+| 归属规则（拟定） | 建立最小租户 / 项目记录，项目必须归属一个租户；Session、Run、Task 的 tenant_id / project_id 必填且创建后不可随普通业务操作改变。Run 与 Session、Task 与 Run、Event 与 Run / 可选 Task 必须在同一租户和项目；检查事件关联 Task 确实属于该 Run。checkpoint 通过所属 Task / Run 继承归属，并校验二者关系。复合唯一约束和外键兜底，不能只依赖 Java 判断；后台领取、续租、重试、取消、暂停 / 恢复、超时及事件写入保留原资源归属。 |
+| 幂等规则（拟定） | Run 唯一约束改为 (tenant_id, idempotency_key)，不是按项目另开唯一范围。同租户同键同请求返回原 Run；同租户同键修改 Session、input、有效期限或切换项目均为 409，不能返回其他项目的 Run；不同租户同键独立创建。查重、冲突处理与并发插入使用同一租户作用域，保留原请求 hash 与时间规范化规则，使旧键升级后仍可重放；重放已过期请求仍沿用现有语义。 |
+| 可信身份来源（拟定） | 新增服务端租户 / 项目上下文及来源接口，为 B11 的已验证身份预留接入点。B10 仅在显式开发模式下允许使用服务端固定配置的租户 / 项目，测试用受控实现注入不同上下文；客户端请求头或请求体中的任意身份字段不能切换归属。未启用开发模式且无可信来源时拒绝资源请求，不静默回退到历史租户。开发身份不代表真实用户认证，也不能作为正式多租户入口。 |
+| 旧数据与历史事件（拟定） | V7 创建明确的历史租户 / 项目，将旧 Session / Run / Task 归入其中；不得据无依据的输入猜测真实公司归属。保留原 ID、请求 hash、输入输出、状态、版本、租约、期限及 checkpoint。由于 domain_events 禁止更新 / 删除，拟新增不可变的事件归属关联表，通过原 event_id / Run / Task 建立归属；迁移只补关联，原事件行、payload、sequence、时间和 schema_version 保持原样，不关闭或绕过事件不可变触发器。新事件与归属关联在同一事务写入；关联缺失须显式报错，不能静默省略事件。历史租户的访问须由显式配置的匹配上下文授予，不对任意请求开放。 |
+| 实现方案①：规则与数据库 | 在 docs/adr/ 新增 B10 ADR，明确归属、租户范围幂等、历史数据、身份来源及 B11 边界。在 services/control-plane/src/main/resources/db/migration/ 新增 V7，建立最小租户 / 项目表、归属列、复合约束、索引及事件归属关联表；回填并校验后收紧约束，替换原幂等全局唯一约束。保留 V1–V6 原样，覆盖新建数据库及 V6 升级路径。 |
+| 实现方案②：数据访问与接口上下文 | Java 路径相对于 services/control-plane/src/main/java/io/nexus/controlplane/：调整 domain/Records.java、persistence/RuntimeStore.java，增加归属映射、带作用域的查重与资源读写。新增上下文接口及显式开发配置，调整 api/SessionController.java、RunController.java、ApiModels.java、ApiExceptionHandler.java 和 service/RuntimeService.java；创建时由可信上下文赋值，子资源继承归属。查询与取消 / 暂停 / 恢复入口使用相同作用域，跨归属资源按不存在处理，避免泄露资源内容；同租户跨项目复用幂等键返回不含原资源内容的冲突。 |
+| 实现方案③：状态、事件与原子性 | 检查 RunCancellationService、RunPauseService、WorkerTransactionService、TaskFailureService、TaskTimeoutService 及心跳 / watchdog 的调用链，确保后台操作依据资源已持久化的归属，不依赖 HTTP 线程上下文，也不套用默认开发租户。新事件和归属关联与状态变更同事务提交；关联写入失败时全部回滚。checkpoint 查询和消费沿所属资源校验。维持 Task → Run 锁顺序、owner / attempt / version 校验、数据库时间及现有截止时间优先级。 |
+| 实现方案④：合约、测试与文档 | packages/contracts/ 同步归属字段、作用域规则、错误及正反例；冻结现行 0.4 HTTP 定义，按演进规则发布新版合约并保留历史事件版本校验，新增字段不改写历史 payload。B10 只补归属所需字段，完整 Trace / Agent / Tool 因果 envelope 留待 B35。新增迁移、幂等并发、归属约束、上下文和 HTTP / 合约测试；更新 README、合约说明及 scripts/check-test-reports.py 的必需测试清单。 |
+| 验收条件①：数据库升级与历史保留 | 空库初始化、V6 → V7 升级均成功；旧 Run 通过匹配的历史租户 / 项目上下文仍可查询，旧结果、checkpoint、期限和幂等重放保持有效。逐项比对升级前后的事件数量、顺序、ID、payload、时间和版本；归属关联完整，事件更新 / 删除仍被拒绝，关联不可随意改写。 |
+| 验收条件②：租户范围幂等 | 顺序及独立事务并发验证同租户同键同请求只生成一个 Run / Task 和一组创建事件及归属关联；同租户同键不同请求或不同项目返回 409，且不暴露原 Run 内容；不同租户同键均成功且互不影响。覆盖原请求 hash、期限偏移规范化、已到期请求重放及迁移后旧键重放。 |
+| 验收条件③：归属与身份来源 | 通过真实 PostgreSQL 插入错误归属，验证 Session → Run、Run → Task、Run / Task → Event 及 checkpoint 关联不能跨租户 / 项目或错误 Run；不存在的租户 / 项目和不匹配组合被拒绝。在受控上下文间切换，验证创建、查询、时间线、取消、暂停和恢复只作用于匹配资源；伪造身份请求头 / 请求体不能改变归属。开发模式须显式启用，配置不完整或无可信身份来源时不能静默使用默认租户；不把受控上下文测试算作真实 Token 认证验收。 |
+| 验收条件④：原子性与后台回归 | 注入事件归属关联写入失败，验证创建 / 状态、事件及关联全部回滚，无孤立关联或缺归属的新事件。后台执行、续租、重试、watchdog、取消、超时和暂停 / 恢复产生的记录均继承正确归属；重启后仍保留。现有状态机、短事务、迟到结果拒绝、迁移和并发竞争回归通过，不破坏已有锁顺序和租约语义。 |
+| 验收条件⑤：合约与完整报告 | 真实 HTTP 响应和事件读取通过对应版本合约；归属字段缺失 / 类型错误等新版反例被拒绝，历史事件样本按原版本仍可校验。新增测试进入报告必需清单；独立 PostgreSQL 全量测试实际执行，失败 / 错误 / 跳过均为 0，报告检查、检查器 Python 回归、JAR 打包和 git diff --check 通过。 |
+| 实施分支 | `main`（2026-11-12 登记本方案前读取；工作区无未提交改动） |
+| 开始修改前的提交编号 | `01068234b98aba224cfc01673f8a24212518866e`（2026-11-12 修改本待办文档前的 HEAD，已包含 B09；后续审查以此为基线，检查其后的提交、未提交修改及新建文件。本次文档登记也属于基线之后的改动。） |
+| 验证方式 | 功能实施后先运行场景定向测试，再清理 services/control-plane/target/surefire-reports/ 中的旧报告并保留 target/ 下 Maven 缓存。执行 `docker compose -f deploy/docker-compose.test.yml up --abort-on-container-exit --exit-code-from tests`（容器内 mvn verify），再运行 `python3 scripts/check-test-reports.py`、`python3 -B -m unittest discover -s scripts -p 'test_*.py' -v`，检查 XML 中实际执行、失败、错误、跳过数量及 JAR 打包结果；无论成功或失败，最后用同一 Compose 文件 `down` 清理。只使用独立测试库，不连接演示或业务数据库；数据库集成测试类串行运行。 |
+| 实际实现 | 新增 [ADR 0009](adr/0009-tenant-project-ownership.md)、V7、最小 tenants / projects 表及 Session / Run / Task 归属；复合外键和归属不可变触发器阻止错误关联，沿用 V6 checkpoint 的 Task / Run 外键。幂等约束改为 (tenant_id, idempotency_key)，旧请求 hash / 期限重放规则保留。历史事件行不变，新增不可变 event_ownership；由数据库事件插入触发器同事务补归属，覆盖所有后台写入者，归属失败时状态 / 事件 / checkpoint 一起回滚。读取缺失归属时报错；worker、心跳和 watchdog 不依赖请求身份。新增 TenantContextSource，默认拒绝；显式开发配置只使用服务端固定身份，客户端身份字段无效。资源服务入口校验作用域，跨归属 404，同租户跨项目同键 409。HTTP 升级 0.5，冻结 0.4，原事件版本和 Schema 保留，以 HTTP 覆盖层提供归属。README、合约样本、测试配置和报告必需清单同步更新。 |
+| 实际验证 | 定向测试后清理旧 Surefire 报告，使用独立 Compose PostgreSQL 执行最终 mvn verify：29 类 263 项全部通过，其中数据库集成 17 类 208 项，失败 / 错误 / 跳过均为 0。覆盖同租户同键并发去重、不同请求唯一赢家、不同租户同键独立、同租户跨项目冲突、伪造身份字段无效及全部资源操作作用域；数据库拒绝跨租户 / 项目和错误 Run 关联，归属及历史事件不可变；归属写入故障使创建、取消、暂停及恢复完整回滚。V6 → V7 比较旧 Session / Run / Task、结果、期限、checkpoint 和原事件，验证旧键重放、归属缺失显式失败；后台成功、续租、失败重试、租约回收、超时及完整应用 / 连接池重启保留归属。真实 HTTP / 合约正反例及成功响应头与声明一致，新旧事件按原版本校验；原有可靠性场景全量回归通过。python3 scripts/check-test-reports.py、Python 检查器 12 项回归、JAR 打包及 git diff --check 通过；V1–V6 和旧事件 Schema 与基线逐字节一致，openapi-v0.4.yaml 等于原当前合约。最终全量日志 `/tmp/b10-final-tests.log`，测试容器及网络已 down 清理。 |
+| 未完成 / 边界 | B10 只提供归属和可信上下文接入边界，真实 OAuth2 / OIDC Token 校验及用户成员关系尚未实现，留待 B11；固定开发身份不用于正式多租户服务。旧记录统一归入 legacy/legacy，未推断真实公司归属；没有公开租户 / 项目管理 API。应用数据库账户为受信任内部边界，本任务未实现 RLS、租户公平调度、配额或完整 B35 事件 envelope。尚未进行新的 GitHub Actions 平台验收、生产数据库升级或真实身份联调。 |
+| 下一步 | 停止在 B10，保留方案、审查基线与验收结果，不自动开始 B11。 |
 
 ## 完成记录
 
@@ -165,3 +167,4 @@
 - **B06**（2026-10-31，`db4fd17`）：执行器调用移出长事务，领取 / 进入执行 / 提交结果各用短事务，提交检查 owner、attempt、version 和有效租约；执行名额先于领取，执行池无等待队列，派发拒绝时退避；watchdog 独立轮询并分批回收，关闭 fake worker 后仍运行。独立 PostgreSQL 验收 11 个测试类共 92 项通过，失败 / 错误 / 跳过均为 0，覆盖阻塞执行器时并发推进、无容量时不领取、过期执行前复核、迟到结果拒绝、数据库故障分类及事件回滚；报告检查和 JAR 打包通过。未新增迁移；未做断库 / 网络故障演练及新的 GitHub Actions 平台验收。外部副作用不保证“恰好一次”；心跳续租与截止时间分别留待 B07、B08。
 - **B07**（2026-11-05，`9cc40a0`）：完成独立心跳续租、租约 / 心跳配置校验和 [ADR 0006](adr/0006-lease-heartbeats.md)；续租校验 owner / attempt / version / 活动状态及有效租约，不增加状态版本或尝试次数。审查修复采用 `FOR UPDATE NOWAIT`，避免单任务行锁阻塞其他任务续租。独立 PostgreSQL 全量复验 14 个测试类、123 项通过，失败 / 错误 / 跳过均为 0；报告检查、JAR 打包及 Python 检查器回归 12 项通过，测试容器和网络已清理。未改 V1–V4、HTTP 或事件 Schema。心跳不证明下游有进展，不保证立即中断外部调用或外部副作用“恰好一次”；未做真实模型 / 下游调用、断库 / 网络故障演练或新的 GitHub Actions 平台验收。截止时间 / TIMEOUT 留待 B08，暂停 / 恢复和远程 Worker 协议分别留待 B09、B42。
 - **B08**（2026-11-06，`1d3f4ae`）：完成持久化截止时间、TIMEOUT、独立超时扫描和协作式停止，含旧 attempt / 跨实例通知及 RFC 3339 偏移 / 年份边界修复；规则见 [ADR 0007](adr/0007-execution-deadlines.md)，使用 V5 迁移和 0.3 合约，V1–V4 及历史事件未改写。最终本地独立 PostgreSQL 验收 20 类 190 项通过，其中数据库集成 11 类 146 项实际执行，失败 / 错误 / 跳过均为 0；报告检查、JAR 打包和 Python 检查器回归 12 项通过，测试容器和网络已清理。停止为协作式，不保证立即退出、撤销外部副作用或“恰好一次”；忽略中断的执行器继续占用线程直至退出，迟到结果被拒绝；扫描可因轮询、行锁或数据库故障延迟，所有实例关闭超时写入扫描会延迟可见终态及停止。未做真实模型 / 下游联调、实际断库 / 网络故障演练或新的 GitHub Actions 平台验收；暂停 / 恢复及远程 Worker 分别留待 B09、B42。原始方案与验收记录可查该提交，最终日志曾记录为 `/tmp/b08-review2-final-tests.log`。
+- **B09**（2026-11-07，`0106823`）：完成 [ADR 0008](adr/0008-pause-and-resume.md)、V6、暂停 / 恢复接口、持久化 checkpoint 与跨实例旧执行停止围栏；HTTP / 新事件升级 0.4，旧迁移和历史事件保留。独立 PostgreSQL 全量验收 24 类 248 项通过，其中数据库集成 14 类 198 项实际执行，失败 / 错误 / 跳过均为 0；报告检查、JAR 打包和 Python 检查器回归 12 项通过，测试容器及网络已清理。checkpoint 仅支持 Task 边界恢复；协作式停止不能强制结束忽略中断的执行器或撤销外部副作用，不保证外部副作用“恰好一次”；不带 Pause-Checkpoint 的恢复请求不保证跨暂停周期去重。未做真实模型 / 下游联调、实际断库 / 网络故障演练或新的 GitHub Actions 平台验收；读库失败使用可控桩验证。原方案与验收记录可查该提交，最终日志曾记录为 `/tmp/b09-final-tests.log`。

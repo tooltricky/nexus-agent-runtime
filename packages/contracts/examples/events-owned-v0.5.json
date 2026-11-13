@@ -1,0 +1,196 @@
+[
+  {
+    "sequence": 1,
+    "event_id": "evt_00000001-0000-0000-0000-000000000001",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskPaused",
+    "payload": {
+      "from": "PENDING",
+      "to": "PAUSED",
+      "checkpoint_id": "00000000-0000-0000-0000-000000000001",
+      "attempt": 1,
+      "max_attempts": 3
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  },
+  {
+    "sequence": 2,
+    "event_id": "evt_00000002-0000-0000-0000-000000000001",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunPaused",
+    "payload": {
+      "from": "QUEUED",
+      "to": "PAUSED",
+      "checkpoint_id": "00000000-0000-0000-0000-000000000001",
+      "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  },
+  {
+    "sequence": 3,
+    "event_id": "evt_00000003-0000-0000-0000-000000000001",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskResumed",
+    "payload": {
+      "from": "PAUSED",
+      "to": "PENDING",
+      "checkpoint_id": "00000000-0000-0000-0000-000000000001",
+      "attempt": 1,
+      "max_attempts": 3
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  },
+  {
+    "sequence": 4,
+    "event_id": "evt_00000004-0000-0000-0000-000000000001",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunResumed",
+    "payload": {
+      "from": "PAUSED",
+      "to": "QUEUED",
+      "checkpoint_id": "00000000-0000-0000-0000-000000000001",
+      "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  },
+  {
+    "sequence": 5,
+    "event_id": "evt_00000005-0000-0000-0000-000000000001",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskFailed",
+    "payload": {
+      "from": "PAUSED",
+      "to": "FAILED",
+      "checkpoint_id": "00000000-0000-0000-0000-000000000001",
+      "attempt": 1,
+      "max_attempts": 3,
+      "reason": "PAUSED_ATTEMPTS_EXHAUSTED"
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  },
+  {
+    "sequence": 6,
+    "event_id": "evt_00000006-0000-0000-0000-000000000001",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunFailed",
+    "payload": {
+      "from": "PAUSED",
+      "to": "FAILED",
+      "checkpoint_id": "00000000-0000-0000-0000-000000000001",
+      "task_id": "tsk_00000000-0000-0000-0000-000000000001",
+      "reason": "PAUSED_ATTEMPTS_EXHAUSTED"
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  },
+  {
+    "sequence": 7,
+    "event_id": "evt_00000007-0000-0000-0000-000000000001",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskCancelled",
+    "payload": {
+      "from": "PAUSED",
+      "to": "CANCELLED",
+      "reason": "USER_REQUESTED",
+      "attempt": 1,
+      "max_attempts": 3
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  },
+  {
+    "sequence": 8,
+    "event_id": "evt_00000008-0000-0000-0000-000000000001",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunCancelled",
+    "payload": {
+      "from": "PAUSED",
+      "to": "CANCELLED",
+      "reason": "USER_REQUESTED",
+      "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  },
+  {
+    "sequence": 9,
+    "event_id": "evt_00000009-0000-0000-0000-000000000001",
+    "aggregate_type": "TASK",
+    "aggregate_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "task_id": "tsk_00000000-0000-0000-0000-000000000001",
+    "event_type": "TaskTimedOut",
+    "payload": {
+      "from": "PAUSED",
+      "to": "TIMEOUT",
+      "reason": "DEADLINE_EXCEEDED",
+      "deadline_at": "2026-11-07T08:00:00Z",
+      "attempt": 1,
+      "max_attempts": 3
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  },
+  {
+    "sequence": 10,
+    "event_id": "evt_00000010-0000-0000-0000-000000000001",
+    "aggregate_type": "RUN",
+    "aggregate_id": "run_00000000-0000-0000-0000-000000000001",
+    "run_id": "run_00000000-0000-0000-0000-000000000001",
+    "event_type": "RunTimedOut",
+    "payload": {
+      "from": "PAUSED",
+      "to": "TIMEOUT",
+      "reason": "DEADLINE_EXCEEDED",
+      "deadline_at": "2026-11-07T08:00:00Z",
+      "task_id": "tsk_00000000-0000-0000-0000-000000000001"
+    },
+    "occurred_at": "2026-11-07T08:00:00Z",
+    "schema_version": "0.4",
+    "tenant_id": "legacy",
+    "project_id": "legacy"
+  }
+]

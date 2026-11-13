@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class PauseContractTest {
     @Test void pausedRequiresAnUnconsumedCheckpointAndNoLeaseOrOutput() {
-        ObjectNode run = (ObjectNode) ContractAssertions.resource("examples/run-paused-v0.4.json");
+        ObjectNode run = ContractAssertions.withOwnership(ContractAssertions.resource("examples/run-paused-v0.4.json"));
         valid(run);
         assertThat(ContractAssertions.legacyRunErrors(run)).isNotEmpty();
         for (String path : List.of("/v1/runs/{run_id}/pause", "/v1/runs/{run_id}/resume")) {

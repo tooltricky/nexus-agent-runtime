@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CancellationContractTest {
     @Test
     void cancelSuccessRequiresCancelledRunAndTask() {
-        ObjectNode run = (ObjectNode) ContractAssertions.resource("examples/run-cancelled-v0.2.json");
+        ObjectNode run = ContractAssertions.withOwnership(ContractAssertions.resource("examples/run-cancelled-v0.2.json"));
         String path = "/v1/runs/{run_id}/cancel";
         assertThat(ContractAssertions.responseErrors(path, "post", 200, run)).isEmpty();
         ObjectNode task = (ObjectNode) run.path("tasks").get(0);
@@ -40,7 +40,7 @@ class CancellationContractTest {
     void archivedRunAndEveryHistoricalEventRemainReadableUnderBothContracts() {
         JsonNode run = ContractAssertions.resource("examples/run-v0.1.json");
         assertThat(ContractAssertions.legacyRunErrors(run)).isEmpty();
-        assertThat(ContractAssertions.responseErrors("/v1/runs/{run_id}", "get", 200, run)).isEmpty();
+        assertThat(ContractAssertions.responseErrors("/v1/runs/{run_id}", "get", 200, ContractAssertions.withOwnership(run))).isEmpty();
         for (JsonNode event : ContractAssertions.resource("examples/events-v0.1.json")) {
             assertThat(ContractAssertions.legacyEventErrors(event)).as(event.path("event_type").asText()).isEmpty();
             ContractAssertions.event(event);
@@ -52,7 +52,7 @@ class CancellationContractTest {
 
     @Test
     void newCancelledRunRequiresTheNewContractAndHasNoLeaseOrOutput() {
-        ObjectNode run = (ObjectNode) ContractAssertions.resource("examples/run-cancelled-v0.2.json");
+        ObjectNode run = ContractAssertions.withOwnership(ContractAssertions.resource("examples/run-cancelled-v0.2.json"));
         assertThat(ContractAssertions.responseErrors("/v1/runs/{run_id}", "get", 200, run)).isEmpty();
         assertThat(ContractAssertions.legacyRunErrors(run)).isNotEmpty();
         ObjectNode task = (ObjectNode) run.path("tasks").get(0);

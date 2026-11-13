@@ -141,7 +141,7 @@ worker 会先预留执行名额再领取任务，执行线程池不保留等待�
 再次进入执行器，必须先由 watchdog 回收。
 
 B05 复用 B04 的 V4 迁移，无新增迁移，V1–V4 未改动；历史事件不回填 schema_version。
-Run / timeline 成功查询及取消成功响应在 B09 后带 `Nexus-API-Contract: 0.4`。旧 HTTP 定义保存在
+Run / timeline 成功查询及取消成功响应当前带 `Nexus-API-Contract: 0.5`。旧 HTTP 定义保存在
 `packages/contracts/openapi-v0.1.yaml`，实际取消事件带 `schema_version: "0.2"`，其他既有事件
 仍省略版本。启用取消前，客户端须先支持 CANCELLED 和混合版本事件。
 
@@ -226,7 +226,7 @@ B08 已增加截止时间 / TIMEOUT，规则见下文。心跳实现规则见 [A
 B08 使用 V5 升级，V1–V4 不变，历史事件不回填。B08 当时的 HTTP Run / timeline / cancel 成功响应使用
 `Nexus-API-Contract: 0.3`，冻结的 0.2 定义保存在 `packages/contracts/openapi-v0.2.yaml`；
 新超时和跳过重试事件使用 `schema_version: "0.3"`，取消事件仍为 0.2，既有事件仍无版本。
-B09 的当前版本与兼容要求见下节。
+B09 的暂停语义见下节，B10 的当前版本与归属要求见租户说明。
 
 ## 暂停 / 恢复（B09）
 
@@ -270,10 +270,28 @@ DEADLINE_WATCHDOG_POLL_DELAY_MS / BATCH_SIZE 核对本机正在执行 Task 的�
 重启后仍为 PAUSED，不会自动执行；完整规则见 [ADR 0008](docs/adr/0008-pause-and-resume.md)。
 
 V6 增加 checkpoint 与 PAUSED 数据约束，并扩展暂停任务的超时扫描索引，V1–V5 不改动。
-当前 Run / timeline 查询及 cancel / pause / resume 成功响应带 Nexus-API-Contract: 0.4，
+B09 当时 Run / timeline 查询及 cancel / pause / resume 成功响应带 Nexus-API-Contract: 0.4，
 冻结的 0.3 定义为 packages/contracts/openapi-v0.3.yaml。暂停 / 恢复、次数耗尽恢复和从
 PAUSED 取消 / 超时的事件使用 0.4；其他来源继续原来的事件版本，历史事件保持不变。
 部署前客户端须支持 PAUSED 和混合 0.1 / 0.2 / 0.3 / 0.4 事件。
+
+## 租户 / 项目归属（B10）
+
+Session、Run、Task 和时间线事件现在提供 `tenant_id` / `project_id`。租户是一家公司，项目是工作文件夹；子资源继承上级归属，数据库约束阻止错误关联。`Idempotency-Key` 在同租户内唯一：同键同请求返回原 Run，不同内容或项目返回 409；不同租户同键互不影响。当前 HTTP 合约为 0.5，事件原 payload 版本仍为 0.1–0.4；详见 [ADR 0009](docs/adr/0009-tenant-project-ownership.md)。
+
+默认资源接口拒绝没有可信上下文的请求，返回 `403 identity_unavailable`。B10 尚未接入真实用户登录或 Token 校验。仅本地开发 / 演示可显式配置：
+
+```text
+DEVELOPMENT_IDENTITY_ENABLED=true
+DEVELOPMENT_TENANT_ID=legacy
+DEVELOPMENT_PROJECT_ID=legacy
+```
+
+演示 `deploy/docker-compose.yml` 已明确配置这三个值，因此前面的 curl 示例仍可使用。直接启动应用时默认关闭开发身份；启用后缺少 / 非法标识会启动失败，项目不存在则请求被拒绝。请求中的 `X-Tenant-Id`、`X-Project-Id` 或 JSON 身份字段均不能切换身份。一个开发实例使用一个固定身份，不能用于正式多租户服务；正式身份校验留待 B11。
+
+V7 将旧数据归入 `legacy/legacy`，保留原 ID、结果、进度及幂等键。旧事件原文保持不可修改，通过新增不可变 `event_ownership` 关联归属；新事件由数据库触发器在原事务自动建立关联，关联失败时状态与事件一起回滚。查询、时间线、取消、暂停及恢复只允许匹配归属，其他范围返回 404。worker 和 watchdog 根据任务自身归属运行，不依赖请求身份。
+
+如需本地测试其他固定开发身份，先在独立开发数据库中由管理员建立对应租户和项目，再修改服务端配置；本任务没有公开租户 / 项目管理接口，也不接受请求者自行注册归属。V7 升级时保留所有历史事件；上线前应停止旧版本写入者并备份数据库，升级后统一使用新版应用，旧版应用不支持新增必填归属及租户幂等约束。
 
 ## 测试
 
@@ -331,6 +349,11 @@ B09 另覆盖四个阶段暂停 / 恢复、重复和并发请求、暂停周期�
 HTTP 回归测试为避免后台调度干扰并发创建断言，禁用定时 worker，通过独立事务主动推进真实 fake worker；
 重启测试另行启用真实定时 worker 验证自动执行。租约和退避测试直接调整独立测试库的时间字段，避免长时间等待。
 共享清表和有超时的并发同步辅助代码位于 `src/test/java/io/nexus/controlplane/support/RuntimeTestSupport.java`。
+B10 专项覆盖租户范围并发幂等、同租户跨项目冲突、HTTP 资源作用域与伪造身份字段、
+默认拒绝 / 显式开发配置、跨归属数据库约束、事件归属写入故障回滚、后台重试 / 超时与
+完整应用重启。V6 → V7 逐项比较历史行及 checkpoint，验证旧键重放和不可变事件保留；
+HTTP 0.5 归属字段正反例与原始历史合约分别校验。
+
 测试类共享同一测试库，不能并行运行这些集成测试类。
 
 合约测试随 `mvn test` 执行，通过 networknt JSON Schema 校验器（2020-12，显式校验时间格式）
@@ -359,7 +382,7 @@ Docker 构建上下文也使用仓库根目录。
 集成测试仍串行运行，避免共享清表互相干扰。
 
 每次 CI 使用新 runner 的工作区，不复用旧测试报告。Maven 返回成功后仍要检查 Surefire XML：
-所有 24 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
+所有 29 个现有测试类必须有报告并实际执行，任何报告包含失败、错误、跳过、零项测试、
 不一致的计数或损坏内容都会使 CI 失败。新增或重命名测试类时，同步维护
 `scripts/check-test-reports.py` 的 `REQUIRED_SUITES`；发现的其他测试类也接受同样检查。
 所以即使漏配 `TEST_DB_URL` 导致 Maven 跳过集成测试，整次 CI 也不会显示成功。
@@ -405,4 +428,5 @@ nexus-agent-runtime/
 、[ADR 0005](docs/adr/0005-cancellation-foundation.md)
 、[ADR 0006](docs/adr/0006-lease-heartbeats.md)
 、[ADR 0007](docs/adr/0007-execution-deadlines.md)
-和 [ADR 0008](docs/adr/0008-pause-and-resume.md)。
+、[ADR 0008](docs/adr/0008-pause-and-resume.md)
+和 [ADR 0009](docs/adr/0009-tenant-project-ownership.md)。

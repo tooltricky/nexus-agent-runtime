@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class DeadlineContractTest {
     @Test void timeoutResponseRequiresDeadlineAndForbidsOutputAndLease() {
-        ObjectNode run = (ObjectNode) ContractAssertions.resource("examples/run-timeout-v0.3.json");
+        ObjectNode run = ContractAssertions.withOwnership(ContractAssertions.resource("examples/run-timeout-v0.3.json"));
         assertThat(ContractAssertions.responseErrors("/v1/runs/{run_id}","get",200,run)).isEmpty();
         assertThat(ContractAssertions.legacyRunErrors(run)).isNotEmpty();
         for (ObjectNode node : List.of(run, (ObjectNode)run.path("tasks").get(0))) {

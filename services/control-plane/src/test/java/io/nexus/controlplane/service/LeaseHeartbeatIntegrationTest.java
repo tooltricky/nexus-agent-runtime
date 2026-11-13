@@ -102,7 +102,7 @@ class LeaseHeartbeatIntegrationTest {
         assertThat(store.findTimeline(runId)).isEqualTo(events);
         assertThat(transactions.renewLease(new TaskRecord("absent", task.runId(), task.name(), task.deadlineAt(), task.status(),
                 task.input(), task.output(), task.leaseOwner(), task.leaseExpiresAt(), task.attempt(), task.maxAttempts(),
-                task.nextAttemptAt(), task.version(), task.createdAt(), task.updatedAt()), "worker", LEASE)).isFalse();
+                task.nextAttemptAt(), task.version(), task.createdAt(), task.updatedAt(), task.tenantId(), task.projectId()), "worker", LEASE)).isFalse();
     }
 
     @ParameterizedTest
@@ -425,7 +425,7 @@ class LeaseHeartbeatIntegrationTest {
     private void expire() { jdbc.update("UPDATE tasks SET lease_expires_at=clock_timestamp()-INTERVAL '1 second' WHERE run_id=?", runId); }
     private static TaskRecord withFence(TaskRecord t, int attempt, long version) {
         return new TaskRecord(t.id(), t.runId(), t.name(), t.deadlineAt(), t.status(), t.input(), t.output(), t.leaseOwner(),
-                t.leaseExpiresAt(), attempt, t.maxAttempts(), t.nextAttemptAt(), version, t.createdAt(), t.updatedAt());
+                t.leaseExpiresAt(), attempt, t.maxAttempts(), t.nextAttemptAt(), version, t.createdAt(), t.updatedAt(), t.tenantId(), t.projectId());
     }
     private static void awaitLatch(CountDownLatch latch) {
         try { assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue(); }

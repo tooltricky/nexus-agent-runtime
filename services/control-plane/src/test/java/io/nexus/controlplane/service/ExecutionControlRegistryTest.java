@@ -91,7 +91,7 @@ class ExecutionControlRegistryTest {
     }
     private TaskRecord withVersion(TaskRecord t, long version) {
         return new TaskRecord(t.id(), t.runId(), t.name(), t.deadlineAt(), t.status(), t.input(), t.output(),
-                t.leaseOwner(), t.leaseExpiresAt(), t.attempt(), t.maxAttempts(), t.nextAttemptAt(), version, t.createdAt(), t.updatedAt());
+                t.leaseOwner(), t.leaseExpiresAt(), t.attempt(), t.maxAttempts(), t.nextAttemptAt(), version, t.createdAt(), t.updatedAt(), t.tenantId(), t.projectId());
     }
 
     @Test void timeoutStopsAllOutstandingAttemptsThroughCurrentAttempt() {
@@ -101,7 +101,7 @@ class ExecutionControlRegistryTest {
         var current = task(2);
         var newer = task(3);
         var other = new TaskRecord("other", "other-run", old.name(), old.deadlineAt(), old.status(),
-                null, null, old.leaseOwner(), old.leaseExpiresAt(), 1, 3, old.nextAttemptAt(), 2, old.createdAt(), old.updatedAt());
+                null, null, old.leaseOwner(), old.leaseExpiresAt(), 1, 3, old.nextAttemptAt(), 2, old.createdAt(), old.updatedAt(), old.tenantId(), old.projectId());
         for (var task : java.util.List.of(old, current, newer, other)) {
             heartbeats.track(task, task.leaseOwner(), java.time.Duration.ofSeconds(30));
         }
@@ -165,6 +165,6 @@ class ExecutionControlRegistryTest {
     private TaskRecord task(String id, int attempt) {
         Instant now = Instant.now();
         return new TaskRecord(id, "run", "test", now.plusSeconds(60), TaskStatus.EXECUTING,
-                null, null, "owner", now.plusSeconds(30), attempt, 3, now, attempt * 2L, now, now);
+                null, null, "owner", now.plusSeconds(30), attempt, 3, now, attempt * 2L, now, now, "tenant", "project");
     }
 }

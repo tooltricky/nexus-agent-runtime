@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexus.local/contracts/owned-domain-event-v0.5.schema.json",
+  "description": "Ownership supplied from immutable event_ownership, not by modifying historical domain_events. schema_version still selects the original payload contract.",
+  "type": "object",
+  "required": [
+    "tenant_id",
+    "project_id"
+  ],
+  "properties": {
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "\\S"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "\\S"
+    }
+  }
+}

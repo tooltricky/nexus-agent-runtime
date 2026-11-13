@@ -77,7 +77,7 @@ class CancellationMigrationIntegrationTest {
                 assertThat(jdbc.queryForList("SELECT (to_jsonb(e) - 'schema_version')::text AS event FROM domain_events e ORDER BY sequence"))
                         .isEqualTo(oldEvents);
                 assertThat(jdbc.queryForObject("SELECT count(*) FROM domain_events WHERE schema_version IS NOT NULL", Integer.class)).isZero();
-                migration(source, schema, "5").migrate();
+                migration(source, schema, "7").migrate();
                 var store = new RuntimeStore(jdbc, new ObjectMapper());
                 for (int i = 0; i < index; i++) {
                     assertThat(store.findRun("run_old_" + i)).isPresent();
@@ -109,7 +109,7 @@ class CancellationMigrationIntegrationTest {
                 jdbc.update("INSERT INTO sessions (id) VALUES ('ses_old')");
                 jdbc.update("INSERT INTO runs (id,session_id,idempotency_key,request_hash,input,status) VALUES ('run_old_0','ses_old','key','hash','test','QUEUED')");
                 jdbc.update("INSERT INTO tasks (id,run_id,name,input,status) VALUES ('tsk_old_0','run_old_0','test','{\"input\":\"test\"}','PENDING')");
-                migration(source, schema, "5").migrate();
+                migration(source, schema, "7").migrate();
                 assertCancellationConstraints(jdbc, new RuntimeStore(jdbc, new ObjectMapper()));
             }
         } finally {

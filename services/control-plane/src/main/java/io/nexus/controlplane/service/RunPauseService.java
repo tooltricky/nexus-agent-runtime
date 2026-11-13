@@ -85,6 +85,7 @@ public class RunPauseService {
     }
 
     private LockedRun lockActiveRun(String runId) {
+        runtime.requireRunScope(runId);
         var tasks = store.findTasksForUpdate(runId);
         var run = store.findRunForUpdate(runId).orElseThrow(() -> new NotFoundException("Run not found: " + runId));
         if (run.status().isTerminal()) throw conflict(runId);

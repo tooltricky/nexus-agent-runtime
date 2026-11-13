@@ -1,7 +1,7 @@
 # HTTP 与领域事件合约
 
 `openapi.yaml` 使用 OpenAPI 3.1（Schema Object 为 JSON Schema 2020-12）。当前 HTTP 合约版本为
-`0.4.0`；`openapi-v0.1.yaml`、`openapi-v0.2.yaml`、`openapi-v0.3.yaml` 和对应事件 Schema 保留旧版定义。
+`0.5.0`；`openapi-v0.1.yaml`、`openapi-v0.2.yaml`、`openapi-v0.3.yaml`、`openapi-v0.4.yaml` 和对应事件 Schema 保留旧版定义。
 
 创建 Run 的 `session_id` / `input` 必须是非空白字符串；空白按当前 Bean Validation 的
 `String.trim()` 语义判断（U+0000–U+0020），内容不做 trim。`Idempotency-Key` 必须提供，
@@ -81,7 +81,7 @@ DeadlineContractTest 和真实 HTTP / PostgreSQL 测试校验，并保留旧样�
 
 ## B09：PAUSED、checkpoint 与 0.4 版本
 
-当前 Run / timeline GET、cancel / pause / resume POST 成功响应带 `Nexus-API-Contract: 0.4`。
+B09 当时 Run / timeline GET、cancel / pause / resume POST 成功响应带 `Nexus-API-Contract: 0.4`。
 `openapi-v0.3.yaml` 冻结 B08 的定义；不协商旧版响应。新增 `POST /v1/runs/{run_id}/pause`
 和 `/resume`，无需请求体或 Idempotency-Key，忽略请求体；200 返回当前 Run，404 表示不存在，
 409 `pause_conflict` 表示终态、到期或恢复时暂停编号不匹配。首次恢复时若已耗尽尝试次数，
@@ -108,3 +108,11 @@ TaskResumed、RunResumed、从 PAUSED 耗尽的 TaskFailed / RunFailed，以及�
 
 恢复只在未完成 Task 边界进行，不是线程或模型调用快照；尝试次数不退还，旧结果和旧停止
 通知不能影响恢复后的执行。事务与竞争规则见 [ADR 0008](../../docs/adr/0008-pause-and-resume.md)。
+
+## B10：归属与 HTTP 0.5
+
+当前 Run / timeline GET、cancel / pause / resume POST 成功响应带 `Nexus-API-Contract: 0.5`；冻结 0.4 HTTP 定义，旧事件 Schema 和原始样本保持不变。Session、Run、Task 的响应必须提供非空、至多 100 字符的 `tenant_id` / `project_id`。新样本为 `run-owned-v0.5.json`、`events-owned-v0.5.json`。
+
+时间线中的 `OwnedDomainEvent` 是原 `DomainEvent` 与 `owned-domain-event-v0.5.schema.json` 的组合，要求归属字段；归属来自不可变关联表，历史 payload / schema_version 不改写。独立的原始事件仍按各自冻结 Schema 校验；0.5 是 HTTP 覆盖层版本，不是新的 payload 版本。未知 payload 版本继续拒绝。字段关系和项目关联由数据库 / 集成测试校验。
+
+幂等键在租户内唯一，同租户跨项目复用同键为 409（返回通用冲突，不泄露原 Run），不同租户同键互不冲突；原请求 hash 和过期重放规则保留。请求体未知字段继续忽略，任意租户 / 项目头或字段不能赋予身份。可信上下文缺失返回 `403 identity_unavailable`，其他租户 / 项目的资源返回 404。显式固定开发身份只用于本地演示；真实 OAuth2 / OIDC Token 校验尚未实现，留待 B11。详见 ADR 0009 和根 README。

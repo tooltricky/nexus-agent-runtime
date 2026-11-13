@@ -408,7 +408,7 @@ class RunCancellationIntegrationTest {
 
     private static TaskRecord withFence(TaskRecord t, int attempt, long version) {
         return new TaskRecord(t.id(), t.runId(), t.name(), t.deadlineAt(), t.status(), t.input(), t.output(), t.leaseOwner(),
-                t.leaseExpiresAt(), attempt, t.maxAttempts(), t.nextAttemptAt(), version, t.createdAt(), t.updatedAt());
+                t.leaseExpiresAt(), attempt, t.maxAttempts(), t.nextAttemptAt(), version, t.createdAt(), t.updatedAt(), t.tenantId(), t.projectId());
     }
 
     private void prepare(TaskStatus stage) {

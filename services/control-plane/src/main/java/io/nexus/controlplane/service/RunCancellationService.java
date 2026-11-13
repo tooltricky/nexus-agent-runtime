@@ -25,6 +25,7 @@ public class RunCancellationService {
 
     @Transactional(noRollbackFor = CancellationConflictException.class)
     public RunResponse cancel(String runId) {
+        runtime.requireRunScope(runId);
         // Every existing worker path locks/updates Task before Run. Never invert that order.
         var tasks = store.findTasksForUpdate(runId);
         var run = store.findRunForUpdate(runId)

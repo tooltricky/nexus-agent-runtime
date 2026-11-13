@@ -8,7 +8,7 @@ public final class Records {
     private Records() {
     }
 
-    public record SessionRecord(String id, Instant createdAt) {
+    public record SessionRecord(String id, Instant createdAt, String tenantId, String projectId) {
     }
 
     public record RunRecord(
@@ -22,7 +22,8 @@ public final class Records {
             JsonNode output,
             long version,
             Instant createdAt,
-            Instant updatedAt
+            Instant updatedAt,
+            String tenantId, String projectId
     ) {
     }
 
@@ -41,7 +42,8 @@ public final class Records {
             Instant nextAttemptAt,
             long version,
             Instant createdAt,
-            Instant updatedAt
+            Instant updatedAt,
+            String tenantId, String projectId
     ) {
 
     }
@@ -62,7 +64,8 @@ public final class Records {
             String eventType,
             JsonNode payload,
             Instant occurredAt,
-            String schemaVersion
+            String schemaVersion,
+            String tenantId, String projectId
     ) {
     }
 }
